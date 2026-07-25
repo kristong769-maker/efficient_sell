@@ -19,16 +19,16 @@ from tkinter import messagebox, ttk
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / ".data"
-APP_VERSION = "1.01"
-BG = "#0b1118"
-PANEL = "#15212d"
-PANEL_2 = "#0e1821"
-LINE = "#2c4052"
-TEXT = "#e7f0f7"
-MUTED = "#8fa3b5"
-BLUE = "#66c0f4"
-GREEN = "#66d19e"
-RED = "#ff6b72"
+APP_VERSION = "1.0.2"
+BG = "#f5f7fa"
+PANEL = "#ffffff"
+PANEL_2 = "#f8fafc"
+LINE = "#dbe3ea"
+TEXT = "#17212b"
+MUTED = "#667788"
+BLUE = "#237fb3"
+GREEN = "#278c64"
+RED = "#d64c57"
 PRICE_MODE_BUYER = "买家支付总价"
 PRICE_MODE_RECEIVE = "卖家实收金额"
 PRICE_MODE_LOWEST = "市场最低在售价"
@@ -46,6 +46,12 @@ class SteamQuickSellApp:
         self.root.geometry("940x760")
         self.root.minsize(620, 460)
         self.root.configure(bg=BG)
+        icon_path = ROOT / "assets" / "efficent_sell_es_transparent.ico"
+        if icon_path.exists():
+            try:
+                self.root.iconbitmap(default=str(icon_path))
+            except tk.TclError:
+                pass
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         self.backend = None
@@ -104,12 +110,16 @@ class SteamQuickSellApp:
         )
         style.configure(
             "Dark.Treeview.Heading",
-            background="#20303e",
+            background="#eef3f7",
             foreground=TEXT,
             relief="flat",
             padding=6,
         )
-        style.map("Dark.Treeview", background=[("selected", "#244d68")])
+        style.map(
+            "Dark.Treeview",
+            background=[("selected", "#dceef8")],
+            foreground=[("selected", TEXT)],
+        )
         style.configure(
             "Dark.Horizontal.TProgressbar",
             troughcolor=PANEL_2,
@@ -172,7 +182,7 @@ class SteamQuickSellApp:
             header,
             text="● 正在启动后台…",
             bg=BG,
-            fg="#f2bf63",
+            fg="#a66b14",
             font=("Microsoft YaHei UI", 10),
         )
         self.status_label.pack(side="right", anchor="s", pady=8)
@@ -196,7 +206,7 @@ class SteamQuickSellApp:
         )
         self.connection_hint.pack(anchor="w", pady=(7, 0))
         self.reconnect_button = self.button(
-            self.connection_panel, "重新检测", self.refresh_status, BLUE, "#07131c"
+            self.connection_panel, "重新检测", self.refresh_status, BLUE, "white"
         )
         self.reconnect_button.pack(side="right", padx=22, ipadx=10)
 
@@ -225,7 +235,7 @@ class SteamQuickSellApp:
             style="Dark.TCombobox",
         )
         self.mode_box.grid(row=1, column=1, padx=(0, 10), pady=(0, 10))
-        self.scan_button = self.button(search_card, "扫描库存", self.scan, BLUE, "#07131c")
+        self.scan_button = self.button(search_card, "扫描库存", self.scan, BLUE, "white")
         self.scan_button.grid(row=1, column=2, padx=(0, 20), pady=(0, 10), ipadx=8)
         tk.Label(
             search_card,
@@ -261,8 +271,8 @@ class SteamQuickSellApp:
             cards_card,
             "按市场最低在售价扫描",
             lambda: self.scan_trading_cards("lowest"),
-            "#66d19e",
-            "#07131c",
+            "#dff3e9",
+            "#21694f",
         )
         self.cards_button.pack(
             fill="x",
@@ -273,8 +283,8 @@ class SteamQuickSellApp:
             cards_card,
             "按最高求购价扫描（优先立即成交）",
             lambda: self.scan_trading_cards("highest_buy"),
-            "#e5ad4d",
-            "#07131c",
+            "#fff0c7",
+            "#76500f",
         )
         self.cards_buy_order_button.pack(
             fill="x",
@@ -345,7 +355,7 @@ class SteamQuickSellApp:
             bg=PANEL_2,
             fg=TEXT,
             insertbackground=TEXT,
-            buttonbackground="#26394b",
+            buttonbackground="#dce5eb",
             relief="flat",
             width=10,
             font=("Segoe UI", 11),
@@ -391,7 +401,7 @@ class SteamQuickSellApp:
         )
         self.confirm_check.pack(anchor="w", padx=20)
         self.sell_button = self.button(
-            self.preview_card, "一键出售", self.sell, "#d94c58", "white"
+            self.preview_card, "一键出售", self.sell, RED, "white"
         )
         self.sell_button.pack(fill="x", padx=20, pady=(10, 18))
 
@@ -432,7 +442,8 @@ class SteamQuickSellApp:
             height=5,
             bg=PANEL_2,
             fg=TEXT,
-            selectbackground="#244d68",
+            selectbackground="#dceef8",
+            selectforeground=TEXT,
             relief="flat",
             highlightthickness=0,
             font=("Microsoft YaHei UI", 9),
@@ -476,7 +487,7 @@ class SteamQuickSellApp:
             fg=foreground,
             activebackground=background,
             activeforeground=foreground,
-            disabledforeground="#70808e",
+            disabledforeground="#9aa8b3",
             relief="flat",
             cursor="hand2",
             padx=16,
@@ -597,7 +608,7 @@ class SteamQuickSellApp:
         messagebox.showerror("启动失败", str(error))
 
     def refresh_status(self):
-        self.status_label.configure(text="● 正在检查登录状态…", fg="#f2bf63")
+        self.status_label.configure(text="● 正在检查登录状态…", fg="#a66b14")
         self.run_async(
             lambda: self.api("/api/status"),
             self.apply_status,
