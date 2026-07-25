@@ -30,6 +30,43 @@ function itemMatches(description, query, mode = "exact") {
     : values.some((value) => value === needle);
 }
 
+function normalizeMarketPriceMode(value) {
+  if (value === "lowest" || value === "highest_buy") return value;
+  return null;
+}
+
+function marketListingKey(appId, marketHashName) {
+  return `${String(appId)}|${String(marketHashName)}`;
+}
+
+function marketListingUrl(appId, marketHashName) {
+  return (
+    `https://steamcommunity.com/market/listings/${encodeURIComponent(appId)}/`
+    + encodeURIComponent(marketHashName)
+  );
+}
+
+function capMatchesToHighestBuyDemand(items) {
+  const remainingByListing = new Map();
+  const kept = [];
+  for (const item of items) {
+    const key = marketListingKey(item.appId, item.marketHashName);
+    if (!remainingByListing.has(key)) {
+      remainingByListing.set(
+        key,
+        Math.max(0, Math.trunc(Number(item.highestBuyOrderQuantity || 0)))
+      );
+    }
+    const remaining = remainingByListing.get(key);
+    const amount = Math.min(item.amount, remaining);
+    if (amount > 0 && item.highestBuyOrderSellerPrice > 0) {
+      kept.push({ ...item, amount });
+      remainingByListing.set(key, remaining - amount);
+    }
+  }
+  return kept;
+}
+
 function extractBalancedObject(source, marker) {
   const markerIndex = source.indexOf(marker);
   if (markerIndex < 0) return null;
@@ -238,6 +275,7 @@ function sleep(milliseconds) {
 
 module.exports = {
   buyerPriceForDesiredReceive,
+  capMatchesToHighestBuyDemand,
   calculateFees,
   currencyMetadata,
   extractBalancedObject,
@@ -246,7 +284,10 @@ module.exports = {
   highestBuyOrderFromListingHtml,
   highestBuyOrderFromHistogram,
   itemMatches,
+  marketListingKey,
+  marketListingUrl,
   normalizeName,
+  normalizeMarketPriceMode,
   parseDisplayPrice,
   parseEmbeddedJson,
   parseFormattedMarketPrice,

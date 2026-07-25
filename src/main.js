@@ -7,6 +7,7 @@ const path = require("node:path");
 const { chromium } = require("playwright-core");
 const {
   buyerPriceForDesiredReceive,
+  capMatchesToHighestBuyDemand,
   calculateFees,
   currencyMetadata,
   extractMarketItemNameId,
@@ -14,6 +15,9 @@ const {
   highestBuyOrderFromListingHtml,
   highestBuyOrderFromHistogram,
   itemMatches,
+  marketListingKey,
+  marketListingUrl,
+  normalizeMarketPriceMode,
   parseDisplayPrice,
   parseEmbeddedJson,
   sleep
@@ -429,7 +433,7 @@ async function scanMatches(steamId, query, mode, options = {}) {
 function groupMatches(matches) {
   const grouped = new Map();
   for (const item of matches) {
-    const key = `${item.appId}|${item.marketHashName}`;
+    const key = marketListingKey(item.appId, item.marketHashName);
     const current = grouped.get(key) || {
       appId: item.appId,
       appName: item.appName,
@@ -449,11 +453,11 @@ function groupMatches(matches) {
   return [...grouped.values()].sort((a, b) => b.count - a.count);
 }
 
-async function fetchLowestMarketBuyerPrice(marketHashName, currencyId) {
+async function fetchLowestMarketBuyerPrice(appId, marketHashName, currencyId) {
   let lastError;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const page = await getSteamClientPage();
-    const result = await page.evaluate(async ({ itemName, walletCurrency }) => {
+    const result = await page.evaluate(async ({ itemAppId, itemName, walletCurrency }) => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15_000);
       try {
@@ -465,7 +469,7 @@ async function fetchLowestMarketBuyerPrice(marketHashName, currencyId) {
           search_descriptions: "0",
           sort_column: "price",
           sort_dir: "asc",
-          appid: "753",
+          appid: String(itemAppId),
           norender: "1",
           currency: String(walletCurrency)
         });
@@ -495,7 +499,7 @@ async function fetchLowestMarketBuyerPrice(marketHashName, currencyId) {
         const overviewUrl = new URL("https://steamcommunity.com/market/priceoverview/");
         overviewUrl.search = new URLSearchParams({
           currency: String(walletCurrency),
-          appid: "753",
+          appid: String(itemAppId),
           market_hash_name: itemName
         });
         const overviewResponse = await fetch(overviewUrl, {
@@ -532,7 +536,11 @@ async function fetchLowestMarketBuyerPrice(marketHashName, currencyId) {
       } finally {
         clearTimeout(timeoutId);
       }
-    }, { itemName: marketHashName, walletCurrency: currencyId });
+    }, {
+      itemAppId: String(appId),
+      itemName: marketHashName,
+      walletCurrency: currencyId
+    });
     if (result.buyerPrice > 0) return result;
     lastError = new Error(result.error || `Steam 返回 HTTP ${result.status}`);
     if (result.status !== 408 && result.status !== 429 && result.status < 500) break;
@@ -541,17 +549,21 @@ async function fetchLowestMarketBuyerPrice(marketHashName, currencyId) {
   throw lastError || new Error("无法读取市场最低价");
 }
 
-async function populateLowestCardPrices(items, wallet) {
+async function populateLowestMarketPrices(items, wallet) {
   const currency = currencyMetadata(wallet);
   const uniqueItems = new Map();
   for (const item of items) {
-    if (!item.isTradingCard) continue;
-    if (!uniqueItems.has(item.marketHashName)) {
-      uniqueItems.set(item.marketHashName, []);
+    const key = marketListingKey(item.appId, item.marketHashName);
+    if (!uniqueItems.has(key)) {
+      uniqueItems.set(key, {
+        appId: item.appId,
+        marketHashName: item.marketHashName,
+        items: []
+      });
     }
-    uniqueItems.get(item.marketHashName).push(item);
+    uniqueItems.get(key).items.push(item);
   }
-  const entries = [...uniqueItems.entries()];
+  const entries = [...uniqueItems.values()];
   const errors = [];
   let nextIndex = 0;
 
@@ -561,9 +573,10 @@ async function populateLowestCardPrices(items, wallet) {
       const index = nextIndex;
       nextIndex += 1;
       if (index >= entries.length) return;
-      const [marketHashName, matchingItems] = entries[index];
+      const { appId, marketHashName, items: matchingItems } = entries[index];
       try {
         const result = await fetchLowestMarketBuyerPrice(
+          appId,
           marketHashName,
           currency.id
         );
@@ -593,15 +606,14 @@ async function populateLowestCardPrices(items, wallet) {
   return errors;
 }
 
-async function fetchHighestMarketBuyOrder(marketHashName, wallet) {
+async function fetchHighestMarketBuyOrder(appId, marketHashName, wallet) {
   let lastError;
-  let cachedItemNameId = marketItemNameIdCache.get(marketHashName) || null;
+  const cacheKey = marketListingKey(appId, marketHashName);
+  let cachedItemNameId = marketItemNameIdCache.get(cacheKey) || null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       if (!cachedItemNameId) {
-        const listingUrl = new URL(
-          `https://steamcommunity.com/market/listings/753/${encodeURIComponent(marketHashName)}`
-        );
+        const listingUrl = new URL(marketListingUrl(appId, marketHashName));
         listingUrl.searchParams.set("l", "english");
         const listingHtml = await getText(listingUrl.href);
         const renderedOrder = highestBuyOrderFromListingHtml(
@@ -613,7 +625,7 @@ async function fetchHighestMarketBuyOrder(marketHashName, wallet) {
         if (!cachedItemNameId) {
           throw new Error("无法识别市场求购数据编号");
         }
-        marketItemNameIdCache.set(marketHashName, cachedItemNameId);
+        marketItemNameIdCache.set(cacheKey, cachedItemNameId);
       }
 
       const histogramUrl = new URL(
@@ -641,17 +653,21 @@ async function fetchHighestMarketBuyOrder(marketHashName, wallet) {
   throw lastError || new Error("无法读取市场最高求购价");
 }
 
-async function populateHighestCardBuyOrders(items, wallet) {
+async function populateHighestMarketBuyOrders(items, wallet) {
   const currency = currencyMetadata(wallet);
   const uniqueItems = new Map();
   for (const item of items) {
-    if (!item.isTradingCard) continue;
-    if (!uniqueItems.has(item.marketHashName)) {
-      uniqueItems.set(item.marketHashName, []);
+    const key = marketListingKey(item.appId, item.marketHashName);
+    if (!uniqueItems.has(key)) {
+      uniqueItems.set(key, {
+        appId: item.appId,
+        marketHashName: item.marketHashName,
+        items: []
+      });
     }
-    uniqueItems.get(item.marketHashName).push(item);
+    uniqueItems.get(key).items.push(item);
   }
-  const entries = [...uniqueItems.entries()];
+  const entries = [...uniqueItems.values()];
   const errors = [];
   let nextIndex = 0;
 
@@ -661,9 +677,13 @@ async function populateHighestCardBuyOrders(items, wallet) {
       const index = nextIndex;
       nextIndex += 1;
       if (index >= entries.length) return;
-      const [marketHashName, matchingItems] = entries[index];
+      const { appId, marketHashName, items: matchingItems } = entries[index];
       try {
-        const result = await fetchHighestMarketBuyOrder(marketHashName, wallet);
+        const result = await fetchHighestMarketBuyOrder(
+          appId,
+          marketHashName,
+          wallet
+        );
         for (const item of matchingItems) {
           const quote = calculateFees(
             result.buyerPrice,
@@ -691,35 +711,17 @@ async function populateHighestCardBuyOrders(items, wallet) {
   return errors;
 }
 
-function capMatchesToHighestBuyDemand(items) {
-  const remainingByName = new Map();
-  const kept = [];
-  for (const item of items) {
-    if (!remainingByName.has(item.marketHashName)) {
-      remainingByName.set(
-        item.marketHashName,
-        Math.max(0, Math.trunc(Number(item.highestBuyOrderQuantity || 0)))
-      );
-    }
-    const remaining = remainingByName.get(item.marketHashName);
-    const amount = Math.min(item.amount, remaining);
-    if (amount > 0 && item.highestBuyOrderSellerPrice > 0) {
-      kept.push({ ...item, amount });
-      remainingByName.set(item.marketHashName, remaining - amount);
-    }
-  }
-  return kept;
-}
-
 async function createPreview(body) {
   const session = await getSession();
   if (!session) throw new Error("Steam 登录已失效，请重新登录");
   const tradingCardsOnly = body.tradingCardsOnly === true;
-  const cardPriceMode = tradingCardsOnly && body.cardPriceMode === "highest_buy"
-    ? "highest_buy"
-    : tradingCardsOnly
-      ? "lowest"
-      : null;
+  const cardPriceMode = tradingCardsOnly
+    ? normalizeMarketPriceMode(body.cardPriceMode) || "lowest"
+    : null;
+  const itemPriceMode = tradingCardsOnly
+    ? null
+    : normalizeMarketPriceMode(body.itemPriceMode);
+  const marketPriceMode = cardPriceMode || itemPriceMode;
   const query = tradingCardsOnly ? "全部集换式卡牌" : String(body.name || "").trim();
   if (!tradingCardsOnly && (!query || query.length > 160)) {
     throw new Error("请输入有效的物品名称");
@@ -733,18 +735,18 @@ async function createPreview(body) {
   );
   let priceErrors = [];
   let wallet = walletCache?.value || null;
-  if (tradingCardsOnly && scan.matches.length) {
+  if (marketPriceMode && scan.matches.length) {
     wallet = wallet || await getWalletInfo();
-    priceErrors = cardPriceMode === "highest_buy"
-      ? await populateHighestCardBuyOrders(scan.matches, wallet)
-      : await populateLowestCardPrices(scan.matches, wallet);
+    priceErrors = marketPriceMode === "highest_buy"
+      ? await populateHighestMarketBuyOrders(scan.matches, wallet)
+      : await populateLowestMarketPrices(scan.matches, wallet);
   }
   const totalFound = scan.matches.reduce((sum, item) => sum + item.amount, 0);
-  const usableMatches = cardPriceMode === "highest_buy"
+  const usableMatches = marketPriceMode === "highest_buy"
     ? capMatchesToHighestBuyDemand(scan.matches)
-    : tradingCardsOnly
+    : marketPriceMode === "lowest"
       ? scan.matches.filter((item) => item.lowestSellerPrice > 0)
-    : scan.matches;
+      : scan.matches;
   const usableBeforeLimit = usableMatches.reduce(
     (sum, item) => sum + item.amount,
     0
@@ -768,21 +770,23 @@ async function createPreview(body) {
     mode,
     tradingCardsOnly,
     cardPriceMode,
-    marketPriceTime: tradingCardsOnly ? Date.now() : null,
+    itemPriceMode,
+    marketPriceMode,
+    marketPriceTime: marketPriceMode ? Date.now() : null,
     wallet: wallet || walletCache?.value || null,
     items: kept
   });
   const currency = wallet ? currencyMetadata(wallet) : null;
   const marketBuyerPrices = kept
     .map((item) => (
-      cardPriceMode === "highest_buy"
+      marketPriceMode === "highest_buy"
         ? item.highestBuyOrderBuyerPrice
         : item.lowestBuyerPrice
     ))
     .filter((value) => value > 0);
   const marketSellerPrices = kept
     .map((item) => (
-      cardPriceMode === "highest_buy"
+      marketPriceMode === "highest_buy"
         ? item.highestBuyOrderSellerPrice
         : item.lowestSellerPrice
     ))
@@ -800,23 +804,25 @@ async function createPreview(body) {
     mode,
     tradingCardsOnly,
     cardPriceMode,
+    itemPriceMode,
+    marketPriceMode,
     totalFound,
     usableCount: unitsKept,
     truncated: usableBeforeLimit > unitsKept,
-    demandLimited: cardPriceMode === "highest_buy" && totalFound > usableBeforeLimit,
+    demandLimited: marketPriceMode === "highest_buy" && totalFound > usableBeforeLimit,
     groups: groupMatches(kept),
     marketBuyerPriceFormatted,
     marketSellerPriceFormatted,
-    lowestBuyerPriceFormatted: cardPriceMode === "lowest"
+    lowestBuyerPriceFormatted: marketPriceMode === "lowest"
       ? marketBuyerPriceFormatted
       : null,
-    lowestSellerPriceFormatted: cardPriceMode === "lowest"
+    lowestSellerPriceFormatted: marketPriceMode === "lowest"
       ? marketSellerPriceFormatted
       : null,
-    highestBuyOrderFormatted: cardPriceMode === "highest_buy"
+    highestBuyOrderFormatted: marketPriceMode === "highest_buy"
       ? marketBuyerPriceFormatted
       : null,
-    highestBuyOrderSellerFormatted: cardPriceMode === "highest_buy"
+    highestBuyOrderSellerFormatted: marketPriceMode === "highest_buy"
       ? marketSellerPriceFormatted
       : null,
     scannedAssets: scan.scannedAssets,
@@ -1096,12 +1102,12 @@ async function createSellJob(body) {
   const marketHighestBuyMode = body.priceMode === "market_highest_buy";
   const automaticMarketMode = marketLowestMode || marketHighestBuyMode;
   if (automaticMarketMode) {
-    if (!preview.items.length || preview.items.some((item) => !item.isTradingCard)) {
-      throw new Error("市场自动定价仅支持 Steam 集换式卡牌");
+    if (!preview.items.length) {
+      throw new Error("没有取得可用的市场价格，请重新扫描物品");
     }
-    const expectedCardPriceMode = marketHighestBuyMode ? "highest_buy" : "lowest";
-    if (preview.cardPriceMode !== expectedCardPriceMode) {
-      throw new Error("价格模式与扫描结果不一致，请重新扫描集换式卡牌");
+    const expectedMarketPriceMode = marketHighestBuyMode ? "highest_buy" : "lowest";
+    if (preview.marketPriceMode !== expectedMarketPriceMode) {
+      throw new Error("价格模式与扫描结果不一致，请重新扫描物品价格");
     }
     const maximumPriceAge = marketHighestBuyMode ? 30_000 : 60_000;
     if (
@@ -1110,8 +1116,8 @@ async function createSellJob(body) {
     ) {
       throw new Error(
         marketHighestBuyMode
-          ? "最高求购价已超过 30 秒，请重新扫描集换式卡牌"
-          : "市场最低价已超过 60 秒，请重新扫描集换式卡牌"
+          ? "最高求购价已超过 30 秒，请重新扫描物品价格"
+          : "市场最低价已超过 60 秒，请重新扫描物品价格"
       );
     }
   }

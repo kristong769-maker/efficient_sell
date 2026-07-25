@@ -30,7 +30,7 @@ from update_support import (
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / ".data"
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.1.0"
 BG = "#f5f7fa"
 PANEL = "#ffffff"
 PANEL_2 = "#f8fafc"
@@ -78,6 +78,7 @@ class SteamQuickSellApp:
         self.refresh_mode = "exact"
         self.refresh_cards_only = False
         self.refresh_card_price_mode = "lowest"
+        self.refresh_item_price_mode = None
         self.update_info = None
         self.update_checking = False
         self.update_downloading = False
@@ -285,7 +286,7 @@ class SteamQuickSellApp:
         search_card.pack(fill="x", pady=(0, 12))
         tk.Label(
             search_card,
-            text="模块一  普通物品自定义价格出售",
+            text="模块一  普通物品出售",
             bg=PANEL,
             fg=TEXT,
             font=("Microsoft YaHei UI", 13, "bold"),
@@ -308,11 +309,51 @@ class SteamQuickSellApp:
         self.scan_button.grid(row=1, column=2, padx=(0, 20), pady=(0, 10), ipadx=8)
         tk.Label(
             search_card,
-            text="输入完整物品名称更安全；仅匹配可在社区市场出售的物品。",
+            text=(
+                "输入完整物品名称更安全；可使用自定义价格，"
+                "也可按当前市场底价或最高求购价自动定价。"
+            ),
             bg=PANEL,
             fg=MUTED,
             font=("Microsoft YaHei UI", 9),
-        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=20, pady=(0, 15))
+        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=20, pady=(0, 10))
+        item_market_buttons = tk.Frame(search_card, bg=PANEL)
+        item_market_buttons.grid(
+            row=3,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            padx=20,
+            pady=(0, 16),
+        )
+        item_market_buttons.grid_columnconfigure(0, weight=1)
+        item_market_buttons.grid_columnconfigure(1, weight=1)
+        self.item_lowest_button = self.button(
+            item_market_buttons,
+            "以市场底价出售",
+            lambda: self.scan("lowest"),
+            "#dff3e9",
+            "#21694f",
+        )
+        self.item_lowest_button.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=(0, 5),
+        )
+        self.item_highest_button = self.button(
+            item_market_buttons,
+            "以最高求购价出售",
+            lambda: self.scan("highest_buy"),
+            "#fff0c7",
+            "#76500f",
+        )
+        self.item_highest_button.grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            padx=(5, 0),
+        )
         search_card.grid_columnconfigure(0, weight=1)
 
         cards_card = self.card(self.workspace)
@@ -947,6 +988,8 @@ class SteamQuickSellApp:
         for control in (
             self.name_entry,
             self.scan_button,
+            self.item_lowest_button,
+            self.item_highest_button,
             self.cards_button,
             self.cards_buy_order_button,
         ):
@@ -954,22 +997,33 @@ class SteamQuickSellApp:
         if not enabled:
             self.sell_button.configure(state="disabled")
 
-    def scan(self):
+    def scan(self, item_price_mode=None):
         name = self.name_entry.get().strip()
         if not name:
             messagebox.showinfo("请输入名称", "请先输入要出售的物品名称")
             self.name_entry.focus_set()
             return
-        self.scan_button.configure(state="disabled", text="正在扫描…")
+        self.scan_button.configure(state="disabled")
+        self.item_lowest_button.configure(state="disabled")
+        self.item_highest_button.configure(state="disabled")
         self.cards_button.configure(state="disabled")
         self.cards_buy_order_button.configure(state="disabled")
+        if item_price_mode == "highest_buy":
+            self.item_highest_button.configure(text="正在读取最高求购价…")
+        elif item_price_mode == "lowest":
+            self.item_lowest_button.configure(text="正在读取市场底价…")
+        else:
+            self.scan_button.configure(text="正在扫描…")
         mode = "contains" if self.match_mode.get() == "包含关键词" else "exact"
+        payload = {"name": name, "mode": mode}
+        if item_price_mode:
+            payload["itemPriceMode"] = item_price_mode
         self.run_async(
             lambda: self.api(
                 "/api/preview",
                 "POST",
-                {"name": name, "mode": mode},
-                timeout=180,
+                payload,
+                timeout=240 if item_price_mode else 180,
             ),
             self.render_preview,
             self.scan_failed,
@@ -977,6 +1031,8 @@ class SteamQuickSellApp:
 
     def scan_trading_cards(self, card_price_mode):
         self.scan_button.configure(state="disabled")
+        self.item_lowest_button.configure(state="disabled")
+        self.item_highest_button.configure(state="disabled")
         self.cards_button.configure(state="disabled")
         self.cards_buy_order_button.configure(state="disabled")
         active_button = (
@@ -1005,8 +1061,16 @@ class SteamQuickSellApp:
             self.scan_failed,
         )
 
-    def scan_failed(self, error):
+    def reset_scan_buttons(self):
         self.scan_button.configure(state="normal", text="扫描库存")
+        self.item_lowest_button.configure(
+            state="normal",
+            text="以市场底价出售",
+        )
+        self.item_highest_button.configure(
+            state="normal",
+            text="以最高求购价出售",
+        )
         self.cards_button.configure(
             state="normal",
             text="按市场最低在售价扫描",
@@ -1015,27 +1079,26 @@ class SteamQuickSellApp:
             state="normal",
             text="按最高求购价扫描（优先立即成交）",
         )
+
+    def scan_failed(self, error):
+        self.reset_scan_buttons()
         self.show_error(error)
 
     def render_preview(self, preview, show_warnings=True):
-        self.scan_button.configure(state="normal", text="扫描库存")
-        self.cards_button.configure(
-            state="normal",
-            text="按市场最低在售价扫描",
-        )
-        self.cards_buy_order_button.configure(
-            state="normal",
-            text="按最高求购价扫描（优先立即成交）",
-        )
+        self.reset_scan_buttons()
         self.preview = preview
-        card_price_mode = preview.get("cardPriceMode")
+        market_price_mode = (
+            preview.get("marketPriceMode")
+            or preview.get("cardPriceMode")
+            or preview.get("itemPriceMode")
+        )
         self.items_tree.heading(
             "market_price",
             text=(
                 "最高求购价"
-                if card_price_mode == "highest_buy"
+                if market_price_mode == "highest_buy"
                 else "市场最低在售价"
-                if card_price_mode == "lowest"
+                if market_price_mode == "lowest"
                 else "每件价格"
             ),
         )
@@ -1055,7 +1118,7 @@ class SteamQuickSellApp:
         self.quantity_label.configure(
             text=(
                 f"出售数量（最高价求购可接收 {count} 件）"
-                if card_price_mode == "highest_buy"
+                if market_price_mode == "highest_buy"
                 else f"出售数量（可上架 {count} 件）"
             )
         )
@@ -1065,7 +1128,7 @@ class SteamQuickSellApp:
             text=(
                 (
                     f"可按最高求购价出售 {count} 件 · "
-                    if card_price_mode == "highest_buy"
+                    if market_price_mode == "highest_buy"
                     else f"可上架 {count} 件 · "
                 )
                 +
@@ -1074,10 +1137,10 @@ class SteamQuickSellApp:
             )
         )
         self.confirm_var.set(False)
-        if card_price_mode == "highest_buy":
+        if market_price_mode == "highest_buy":
             self.price_mode_box.configure(values=(PRICE_MODE_HIGHEST,))
             self.price_mode.set(PRICE_MODE_HIGHEST)
-        elif card_price_mode == "lowest":
+        elif market_price_mode == "lowest":
             self.price_mode_box.configure(values=(PRICE_MODE_LOWEST,))
             self.price_mode.set(PRICE_MODE_LOWEST)
         else:
@@ -1091,11 +1154,16 @@ class SteamQuickSellApp:
         if not self.preview_card.winfo_ismapped():
             self.preview_card.pack(fill="both", expand=True, pady=(0, 12))
         warnings = []
+        item_kind = (
+            "集换式卡牌"
+            if preview.get("tradingCardsOnly")
+            else "普通物品"
+        )
         if preview.get("truncated"):
             warnings.append(f"本次最多处理 {count} 件")
         if preview.get("demandLimited"):
             warnings.append(
-                "部分卡牌持有数量超过当前最高价求购数量，"
+                f"部分{item_kind}持有数量超过当前最高价求购数量，"
                 "已只保留预计可立即成交的数量"
             )
         if preview.get("errors"):
@@ -1103,9 +1171,9 @@ class SteamQuickSellApp:
         if preview.get("priceErrors"):
             warnings.append(
                 (
-                    "部分卡牌没有取得有效求购价："
-                    if card_price_mode == "highest_buy"
-                    else "部分卡牌没有取得最低在售价："
+                    f"部分{item_kind}没有取得有效求购价："
+                    if market_price_mode == "highest_buy"
+                    else f"部分{item_kind}没有取得最低在售价："
                 )
                 + "；".join(preview["priceErrors"])
             )
@@ -1148,9 +1216,9 @@ class SteamQuickSellApp:
             else:
                 self.quote_label.configure(
                     text=(
-                        "请先扫描集换式卡牌并获取最高求购价"
+                        "请先扫描物品并获取最高求购价"
                         if selected_mode == PRICE_MODE_HIGHEST
-                        else "请先扫描集换式卡牌并获取市场最低在售价"
+                        else "请先扫描物品并获取市场最低在售价"
                     ),
                     fg=MUTED,
                 )
@@ -1270,6 +1338,7 @@ class SteamQuickSellApp:
         self.refresh_card_price_mode = (
             self.preview.get("cardPriceMode") or "lowest"
         )
+        self.refresh_item_price_mode = self.preview.get("itemPriceMode")
         self.sale_in_progress = True
         self.sell_button.configure(state="disabled", text="正在创建任务…")
         self.run_async(
@@ -1330,6 +1399,8 @@ class SteamQuickSellApp:
             return
         self.progress_text.configure(text="任务完成，正在更新库存…")
         self.scan_button.configure(state="disabled", text="正在更新库存…")
+        self.item_lowest_button.configure(state="disabled")
+        self.item_highest_button.configure(state="disabled")
         self.cards_button.configure(state="disabled")
         self.cards_buy_order_button.configure(state="disabled")
         payload = (
@@ -1341,6 +1412,11 @@ class SteamQuickSellApp:
             else {
                 "name": self.refresh_query,
                 "mode": self.refresh_mode,
+                **(
+                    {"itemPriceMode": self.refresh_item_price_mode}
+                    if self.refresh_item_price_mode
+                    else {}
+                ),
             }
         )
 
@@ -1354,15 +1430,7 @@ class SteamQuickSellApp:
 
         def refresh_failed(error):
             self.sale_in_progress = False
-            self.scan_button.configure(state="normal", text="扫描库存")
-            self.cards_button.configure(
-                state="normal",
-                text="按市场最低在售价扫描",
-            )
-            self.cards_buy_order_button.configure(
-                state="normal",
-                text="按最高求购价扫描（优先立即成交）",
-            )
+            self.reset_scan_buttons()
             self.progress_text.configure(text="任务完成，库存更新失败")
             messagebox.showwarning(
                 "上架结果",

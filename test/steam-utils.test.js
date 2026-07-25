@@ -4,12 +4,16 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   buyerPriceForDesiredReceive,
+  capMatchesToHighestBuyDemand,
   calculateFees,
   currencyMetadata,
   extractMarketItemNameId,
   highestBuyOrderFromListingHtml,
   highestBuyOrderFromHistogram,
   itemMatches,
+  marketListingKey,
+  marketListingUrl,
+  normalizeMarketPriceMode,
   parseDisplayPrice,
   parseEmbeddedJson,
   parseFormattedMarketPrice
@@ -28,6 +32,50 @@ test("名称精确匹配忽略大小写和全半角", () => {
   assert.equal(itemMatches({ name: "Ｆｅｖｅｒ Case" }, "fever case", "exact"), true);
   assert.equal(itemMatches({ name: "Fever Case" }, "fever", "exact"), false);
   assert.equal(itemMatches({ name: "Fever Case" }, "fever", "contains"), true);
+});
+
+test("普通物品市场定价模式和跨游戏市场键", () => {
+  assert.equal(normalizeMarketPriceMode("lowest"), "lowest");
+  assert.equal(normalizeMarketPriceMode("highest_buy"), "highest_buy");
+  assert.equal(normalizeMarketPriceMode("custom"), null);
+  assert.equal(marketListingKey(730, "Fever Case"), "730|Fever Case");
+  assert.equal(
+    marketListingUrl(730, "Fever Case | 特殊"),
+    "https://steamcommunity.com/market/listings/730/Fever%20Case%20%7C%20%E7%89%B9%E6%AE%8A"
+  );
+  assert.notEqual(
+    marketListingKey(730, "同名物品"),
+    marketListingKey(753, "同名物品")
+  );
+});
+
+test("最高求购数量按游戏和物品分别限制", () => {
+  const matches = [
+    {
+      appId: "730",
+      marketHashName: "同名物品",
+      amount: 3,
+      highestBuyOrderQuantity: 1,
+      highestBuyOrderSellerPrice: 100
+    },
+    {
+      appId: "753",
+      marketHashName: "同名物品",
+      amount: 4,
+      highestBuyOrderQuantity: 2,
+      highestBuyOrderSellerPrice: 200
+    }
+  ];
+  assert.deepEqual(
+    capMatchesToHighestBuyDemand(matches).map((item) => ({
+      appId: item.appId,
+      amount: item.amount
+    })),
+    [
+      { appId: "730", amount: 1 },
+      { appId: "753", amount: 2 }
+    ]
+  );
 });
 
 test("提取 Steam 页面中的嵌入 JSON", () => {
