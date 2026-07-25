@@ -41,6 +41,7 @@ $runtimeFiles = @(
     "native-ui.py",
     "updater.py",
     "update_support.py",
+    "install-shortcut.ps1",
     "package.json",
     "package-lock.json",
     "README.md",

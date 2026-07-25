@@ -22,6 +22,7 @@ REQUIRED_FILES = {
     "native-ui.py",
     "updater.py",
     "update_support.py",
+    "install-shortcut.ps1",
     "start.bat",
     "package.json",
     "src/main.js",

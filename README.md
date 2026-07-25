@@ -1,4 +1,4 @@
-# Steam 库存一键出售 v1.0.3
+# Steam 库存一键出售 v1.0.4
 
 这是一个仅在本机运行的 Windows 原生桌面工具。它直接复用正在运行的桌面 Steam
 客户端登录状态，不提供也不需要独立登录功能。工具会按用户输入的名称扫描全部
@@ -12,7 +12,8 @@ Steam 库存，并以自定义价格批量提交社区市场挂单。
 
 ## 使用
 
-1. 双击 `start.bat`。
+1. 双击 `start.bat`。程序会自动在当前用户桌面创建或修复
+   `efficent_sell` 快捷方式，无需管理员权限。
 2. 第一次运行会安装一个小型浏览器控制组件。
 3. 保持桌面 Steam 已登录，并在 Steam 客户端中打开一次“社区市场”或“库存”页面。
 4. 输入完整物品名，先扫描并核对匹配数量。
@@ -83,12 +84,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.
 
 ```powershell
 git add .
-git commit -m "release: v1.0.4"
-git tag -a v1.0.4 -m "Steam 库存一键出售 v1.0.4"
+git commit -m "release: v1.0.5"
+git tag -a v1.0.5 -m "Steam 库存一键出售 v1.0.5"
 git push origin master
-git push origin v1.0.4
+git push origin v1.0.5
 ```
 
 `.github/workflows/release.yml` 会在标签推送后自动运行测试，生成
-`efficent_sell-v1.0.4.zip` 和对应的 `.sha256`，并创建 GitHub Release。程序只把
+`efficent_sell-v1.0.5.zip` 和对应的 `.sha256`，并创建 GitHub Release。程序只把
 包含可校验更新包的正式 Release 识别为可一键安装版本。

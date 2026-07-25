@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+if exist "%~dp0install-shortcut.ps1" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-shortcut.ps1" -Silent >nul 2>&1
 if exist "node_modules\playwright-core" goto run
 
 echo Installing required components...
