@@ -30,16 +30,21 @@ from update_support import (
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / ".data"
-APP_VERSION = "1.1.0"
-BG = "#f5f7fa"
+APP_VERSION = "1.1.1"
+BG = "#f3f6fa"
 PANEL = "#ffffff"
-PANEL_2 = "#f8fafc"
-LINE = "#dbe3ea"
-TEXT = "#17212b"
-MUTED = "#667788"
-BLUE = "#237fb3"
-GREEN = "#278c64"
-RED = "#d64c57"
+PANEL_2 = "#f7f9fc"
+LINE = "#dfe6ee"
+TEXT = "#14212b"
+MUTED = "#68788a"
+BLUE = "#187caf"
+GREEN = "#23845f"
+RED = "#d94c5c"
+NAVY = "#173247"
+YELLOW = "#f2c94c"
+SOFT_BLUE = "#eaf4fa"
+SOFT_GREEN = "#e8f5ef"
+SOFT_AMBER = "#fff5d9"
 PRICE_MODE_BUYER = "买家支付总价"
 PRICE_MODE_RECEIVE = "卖家实收金额"
 PRICE_MODE_LOWEST = "市场最低在售价"
@@ -54,7 +59,7 @@ class SteamQuickSellApp:
     def __init__(self, root):
         self.root = root
         self.root.title(f"Steam 库存一键出售 v{APP_VERSION}")
-        self.root.geometry("940x760")
+        self.root.geometry("980x820")
         self.root.minsize(620, 460)
         self.root.configure(bg=BG)
         icon_path = ROOT / "assets" / "efficent_sell_es_transparent.ico"
@@ -111,7 +116,8 @@ class SteamQuickSellApp:
             bordercolor=LINE,
             lightcolor=LINE,
             darkcolor=LINE,
-            padding=7,
+            padding=9,
+            font=("Microsoft YaHei UI", 10),
         )
         style.map(
             "Dark.TCombobox",
@@ -125,15 +131,18 @@ class SteamQuickSellApp:
             background=PANEL_2,
             fieldbackground=PANEL_2,
             foreground=TEXT,
-            rowheight=30,
+            rowheight=34,
             bordercolor=LINE,
+            borderwidth=0,
+            font=("Microsoft YaHei UI", 10),
         )
         style.configure(
             "Dark.Treeview.Heading",
             background="#eef3f7",
             foreground=TEXT,
             relief="flat",
-            padding=6,
+            padding=8,
+            font=("Microsoft YaHei UI", 9, "bold"),
         )
         style.map(
             "Dark.Treeview",
@@ -147,6 +156,15 @@ class SteamQuickSellApp:
             bordercolor=PANEL_2,
             lightcolor=GREEN,
             darkcolor=GREEN,
+        )
+        style.configure(
+            "Vertical.TScrollbar",
+            background="#d3dde7",
+            troughcolor=BG,
+            bordercolor=BG,
+            arrowcolor=MUTED,
+            lightcolor="#d3dde7",
+            darkcolor="#d3dde7",
         )
 
     def build_ui(self):
@@ -167,67 +185,110 @@ class SteamQuickSellApp:
         scrollbar.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
 
-        scroll_content = tk.Frame(self.canvas, bg=BG)
-        outer = tk.Frame(scroll_content, bg=BG)
-        outer.pack(fill="both", expand=True, padx=28, pady=22)
+        self.scroll_content = tk.Frame(self.canvas, bg=BG)
+        outer = tk.Frame(self.scroll_content, bg=BG)
+        outer.pack(fill="both", expand=True, padx=30, pady=24)
         self.canvas_window = self.canvas.create_window(
             (0, 0),
-            window=scroll_content,
+            window=self.scroll_content,
             anchor="nw",
         )
-        scroll_content.bind("<Configure>", self.update_scroll_region)
+        self.scroll_content.bind("<Configure>", self.update_scroll_region)
         self.canvas.bind("<Configure>", self.resize_scroll_content)
         self.root.bind_all("<MouseWheel>", self.on_mouse_wheel)
 
-        header = tk.Frame(outer, bg=BG)
+        header = self.card(outer)
         self.header = header
-        header.pack(fill="x", pady=(0, 18))
-        title_box = tk.Frame(header, bg=BG)
-        title_box.pack(side="left")
+        header.pack(fill="x", pady=(0, 16))
+
+        brand_tile = tk.Frame(
+            header,
+            bg=NAVY,
+            width=58,
+            height=58,
+            bd=0,
+        )
+        brand_tile.pack(side="left", padx=(18, 14), pady=17)
+        brand_tile.pack_propagate(False)
         tk.Label(
-            title_box,
-            text=f"LOCAL STEAM TOOL  ·  v{APP_VERSION}",
-            bg=BG,
+            brand_tile,
+            text="E/S",
+            bg=NAVY,
+            fg=YELLOW,
+            font=("Segoe UI", 17, "bold"),
+        ).place(relx=0.5, rely=0.5, anchor="center")
+
+        title_box = tk.Frame(header, bg=PANEL)
+        title_box.pack(side="left", fill="y", pady=14)
+        kicker = tk.Frame(title_box, bg=PANEL)
+        kicker.pack(anchor="w")
+        tk.Label(
+            kicker,
+            text="STEAM MARKET ASSISTANT",
+            bg=PANEL,
             fg=BLUE,
-            font=("Segoe UI", 9, "bold"),
-        ).pack(anchor="w")
+            font=("Segoe UI", 8, "bold"),
+        ).pack(side="left")
+        tk.Label(
+            kicker,
+            text=f"  v{APP_VERSION}  TEST",
+            bg=SOFT_BLUE,
+            fg=BLUE,
+            padx=7,
+            pady=2,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(side="left", padx=(9, 0))
         tk.Label(
             title_box,
             text="库存一键出售",
-            bg=BG,
+            bg=PANEL,
             fg=TEXT,
-            font=("Microsoft YaHei UI", 26, "bold"),
-        ).pack(anchor="w")
+            font=("Microsoft YaHei UI", 23, "bold"),
+        ).pack(anchor="w", pady=(2, 0))
+        tk.Label(
+            title_box,
+            text="本地运行 · 复用桌面 Steam 登录状态",
+            bg=PANEL,
+            fg=MUTED,
+            font=("Microsoft YaHei UI", 9),
+        ).pack(anchor="w", pady=(2, 0))
 
+        header_actions = tk.Frame(header, bg=PANEL)
+        header_actions.pack(side="right", padx=20, pady=16)
         self.status_label = tk.Label(
-            header,
+            header_actions,
             text="● 正在启动后台…",
-            bg=BG,
+            bg=PANEL,
             fg="#a66b14",
-            font=("Microsoft YaHei UI", 10),
+            font=("Microsoft YaHei UI", 9, "bold"),
         )
-        self.status_label.pack(side="right", anchor="s", pady=8)
+        self.status_label.pack(anchor="e")
         self.update_check_button = tk.Button(
-            header,
+            header_actions,
             text="检查更新",
             command=self.check_for_updates,
-            bg=BG,
+            bg=SOFT_BLUE,
             fg=BLUE,
-            activebackground=BG,
+            activebackground="#deedf6",
             activeforeground=BLUE,
             disabledforeground=MUTED,
             relief="flat",
             cursor="hand2",
-            font=("Microsoft YaHei UI", 9),
+            padx=10,
+            pady=4,
+            font=("Microsoft YaHei UI", 8, "bold"),
         )
         self.update_check_button.pack(
-            side="right",
-            anchor="s",
-            padx=(0, 14),
-            pady=5,
+            anchor="e",
+            pady=(8, 0),
         )
 
         self.update_panel = self.card(outer)
+        tk.Frame(
+            self.update_panel,
+            bg=BLUE,
+            width=4,
+        ).pack(side="left", fill="y")
         update_text = tk.Frame(self.update_panel, bg=PANEL)
         update_text.pack(side="left", fill="x", expand=True, padx=22, pady=17)
         self.update_title = tk.Label(
@@ -258,14 +319,19 @@ class SteamQuickSellApp:
         self.update_action_button.pack(side="right", padx=22, ipadx=8)
 
         self.connection_panel = self.card(outer)
+        tk.Frame(
+            self.connection_panel,
+            bg=BLUE,
+            width=4,
+        ).pack(side="left", fill="y")
         login_text = tk.Frame(self.connection_panel, bg=PANEL)
         login_text.pack(side="left", fill="x", expand=True, padx=22, pady=20)
         tk.Label(
             login_text,
-            text="等待 Steam 客户端",
+            text="正在连接桌面 Steam",
             bg=PANEL,
             fg=TEXT,
-            font=("Microsoft YaHei UI", 15, "bold"),
+            font=("Microsoft YaHei UI", 14, "bold"),
         ).pack(anchor="w")
         self.connection_hint = tk.Label(
             login_text,
@@ -283,16 +349,75 @@ class SteamQuickSellApp:
         self.workspace = tk.Frame(outer, bg=BG)
 
         search_card = self.card(self.workspace)
-        search_card.pack(fill="x", pady=(0, 12))
+        search_card.pack(fill="x", pady=(0, 14))
+        module_one_header = tk.Frame(search_card, bg=PANEL)
+        module_one_header.grid(
+            row=0,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            padx=20,
+            pady=(17, 15),
+        )
         tk.Label(
-            search_card,
-            text="模块一  普通物品出售",
+            module_one_header,
+            text="01",
+            bg=SOFT_BLUE,
+            fg=BLUE,
+            padx=9,
+            pady=4,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left")
+        module_one_titles = tk.Frame(module_one_header, bg=PANEL)
+        module_one_titles.pack(side="left", padx=(10, 0))
+        tk.Label(
+            module_one_titles,
+            text="普通物品出售",
             bg=PANEL,
             fg=TEXT,
             font=("Microsoft YaHei UI", 13, "bold"),
-        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=20, pady=(16, 12))
+        ).pack(anchor="w")
+        tk.Label(
+            module_one_titles,
+            text="按名称查找库存，并选择最适合的定价方式",
+            bg=PANEL,
+            fg=MUTED,
+            font=("Microsoft YaHei UI", 8),
+        ).pack(anchor="w", pady=(2, 0))
+        tk.Label(
+            module_one_header,
+            text="普通物品",
+            bg=PANEL_2,
+            fg=MUTED,
+            padx=9,
+            pady=4,
+            font=("Microsoft YaHei UI", 8, "bold"),
+        ).pack(side="right")
+
+        self.field_label(search_card, "物品名称").grid(
+            row=1,
+            column=0,
+            sticky="w",
+            padx=(20, 10),
+        )
+        self.field_label(search_card, "匹配方式").grid(
+            row=1,
+            column=1,
+            sticky="w",
+        )
+        self.field_label(search_card, "自定义定价").grid(
+            row=1,
+            column=2,
+            sticky="w",
+        )
         self.name_entry = self.entry(search_card)
-        self.name_entry.grid(row=1, column=0, sticky="ew", padx=(20, 10), pady=(0, 10))
+        self.name_entry.grid(
+            row=2,
+            column=0,
+            sticky="ew",
+            padx=(20, 10),
+            pady=(5, 10),
+        )
         self.name_entry.insert(0, "")
         self.name_entry.bind("<Return>", lambda _event: self.scan())
         self.match_mode = tk.StringVar(value="精确匹配")
@@ -304,9 +429,21 @@ class SteamQuickSellApp:
             width=13,
             style="Dark.TCombobox",
         )
-        self.mode_box.grid(row=1, column=1, padx=(0, 10), pady=(0, 10))
-        self.scan_button = self.button(search_card, "扫描库存", self.scan, BLUE, "white")
-        self.scan_button.grid(row=1, column=2, padx=(0, 20), pady=(0, 10), ipadx=8)
+        self.mode_box.grid(row=2, column=1, padx=(0, 10), pady=(5, 10))
+        self.scan_button = self.button(
+            search_card,
+            "扫描并自定义价格",
+            self.scan,
+            BLUE,
+            "white",
+        )
+        self.scan_button.grid(
+            row=2,
+            column=2,
+            padx=(0, 20),
+            pady=(5, 10),
+            ipadx=8,
+        )
         tk.Label(
             search_card,
             text=(
@@ -316,10 +453,10 @@ class SteamQuickSellApp:
             bg=PANEL,
             fg=MUTED,
             font=("Microsoft YaHei UI", 9),
-        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=20, pady=(0, 10))
+        ).grid(row=3, column=0, columnspan=3, sticky="w", padx=20, pady=(0, 11))
         item_market_buttons = tk.Frame(search_card, bg=PANEL)
         item_market_buttons.grid(
-            row=3,
+            row=4,
             column=0,
             columnspan=3,
             sticky="ew",
@@ -328,15 +465,28 @@ class SteamQuickSellApp:
         )
         item_market_buttons.grid_columnconfigure(0, weight=1)
         item_market_buttons.grid_columnconfigure(1, weight=1)
+        tk.Label(
+            item_market_buttons,
+            text="自动市场定价",
+            bg=PANEL,
+            fg=TEXT,
+            font=("Microsoft YaHei UI", 9, "bold"),
+        ).grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 7),
+        )
         self.item_lowest_button = self.button(
             item_market_buttons,
             "以市场底价出售",
             lambda: self.scan("lowest"),
-            "#dff3e9",
+            SOFT_GREEN,
             "#21694f",
         )
         self.item_lowest_button.grid(
-            row=0,
+            row=1,
             column=0,
             sticky="ew",
             padx=(0, 5),
@@ -345,11 +495,11 @@ class SteamQuickSellApp:
             item_market_buttons,
             "以最高求购价出售",
             lambda: self.scan("highest_buy"),
-            "#fff0c7",
+            SOFT_AMBER,
             "#76500f",
         )
         self.item_highest_button.grid(
-            row=0,
+            row=1,
             column=1,
             sticky="ew",
             padx=(5, 0),
@@ -357,59 +507,114 @@ class SteamQuickSellApp:
         search_card.grid_columnconfigure(0, weight=1)
 
         cards_card = self.card(self.workspace)
-        cards_card.pack(fill="x", pady=(0, 12))
+        cards_card.pack(fill="x", pady=(0, 14))
+        module_two_header = tk.Frame(cards_card, bg=PANEL)
+        module_two_header.pack(fill="x", padx=20, pady=(17, 8))
         tk.Label(
-            cards_card,
-            text="模块二  集换式卡牌市场出售",
+            module_two_header,
+            text="02",
+            bg=SOFT_GREEN,
+            fg=GREEN,
+            padx=9,
+            pady=4,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left")
+        module_two_titles = tk.Frame(module_two_header, bg=PANEL)
+        module_two_titles.pack(side="left", padx=(10, 0))
+        tk.Label(
+            module_two_titles,
+            text="集换式卡牌市场出售",
             bg=PANEL,
             fg=TEXT,
             font=("Microsoft YaHei UI", 13, "bold"),
-        ).pack(anchor="w", padx=20, pady=(16, 5))
+        ).pack(anchor="w")
+        tk.Label(
+            module_two_titles,
+            text="自动扫描全部可出售卡牌，并逐种读取实时市场价格",
+            bg=PANEL,
+            fg=MUTED,
+            font=("Microsoft YaHei UI", 8),
+        ).pack(anchor="w", pady=(2, 0))
+        tk.Label(
+            module_two_header,
+            text="集换式卡牌",
+            bg=PANEL_2,
+            fg=MUTED,
+            padx=9,
+            pady=4,
+            font=("Microsoft YaHei UI", 8, "bold"),
+        ).pack(side="right")
         tk.Label(
             cards_card,
             text=(
-                "自动扫描全部可出售卡牌。可按最低在售价创建挂单，"
-                "也可按最高求购价优先立即成交。"
+                "市场底价会创建挂单；最高求购价会优先尝试立即成交。"
+                "提交前请核对每种卡牌的价格和可售数量。"
             ),
             bg=PANEL,
             fg=MUTED,
             font=("Microsoft YaHei UI", 9),
             wraplength=820,
             justify="left",
-        ).pack(anchor="w", padx=20, pady=(0, 12))
+        ).pack(anchor="w", padx=20, pady=(0, 11))
+        card_actions = tk.Frame(cards_card, bg=PANEL)
+        card_actions.pack(fill="x", padx=20, pady=(0, 16))
+        card_actions.grid_columnconfigure(0, weight=1)
+        card_actions.grid_columnconfigure(1, weight=1)
         self.cards_button = self.button(
-            cards_card,
+            card_actions,
             "按市场最低在售价扫描",
             lambda: self.scan_trading_cards("lowest"),
-            "#dff3e9",
+            SOFT_GREEN,
             "#21694f",
         )
-        self.cards_button.pack(
-            fill="x",
-            padx=20,
-            pady=(0, 8),
+        self.cards_button.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=(0, 5),
         )
         self.cards_buy_order_button = self.button(
-            cards_card,
+            card_actions,
             "按最高求购价扫描（优先立即成交）",
             lambda: self.scan_trading_cards("highest_buy"),
-            "#fff0c7",
+            SOFT_AMBER,
             "#76500f",
         )
-        self.cards_buy_order_button.pack(
-            fill="x",
-            padx=20,
-            pady=(0, 16),
+        self.cards_buy_order_button.grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            padx=(5, 0),
         )
 
         self.preview_card = self.card(self.workspace)
+        preview_header = tk.Frame(self.preview_card, bg=PANEL)
+        preview_header.pack(fill="x", padx=20, pady=(16, 12))
         tk.Label(
-            self.preview_card,
+            preview_header,
+            text="预览",
+            bg=SOFT_BLUE,
+            fg=BLUE,
+            padx=9,
+            pady=4,
+            font=("Microsoft YaHei UI", 8, "bold"),
+        ).pack(side="left")
+        preview_titles = tk.Frame(preview_header, bg=PANEL)
+        preview_titles.pack(side="left", padx=(10, 0))
+        tk.Label(
+            preview_titles,
             text="核对物品、数量与价格",
             bg=PANEL,
             fg=TEXT,
             font=("Microsoft YaHei UI", 13, "bold"),
-        ).pack(anchor="w", padx=20, pady=(15, 10))
+        ).pack(anchor="w")
+        tk.Label(
+            preview_titles,
+            text="提交前请确认名称、游戏、可售数量和每件价格",
+            bg=PANEL,
+            fg=MUTED,
+            font=("Microsoft YaHei UI", 8),
+        ).pack(anchor="w", pady=(2, 0))
 
         tree_wrap = tk.Frame(self.preview_card, bg=PANEL)
         tree_wrap.pack(fill="both", expand=True, padx=20)
@@ -428,6 +633,8 @@ class SteamQuickSellApp:
         self.items_tree.column("game", width=210, anchor="w")
         self.items_tree.column("count", width=80, anchor="center")
         self.items_tree.column("market_price", width=150, anchor="e")
+        self.items_tree.tag_configure("even", background=PANEL_2)
+        self.items_tree.tag_configure("odd", background=PANEL)
         scrollbar = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.items_tree.yview)
         self.items_tree.configure(yscrollcommand=scrollbar.set)
         self.items_tree.pack(side="left", fill="both", expand=True)
@@ -436,11 +643,22 @@ class SteamQuickSellApp:
         self.preview_summary = tk.Label(
             self.preview_card,
             text="",
-            bg=PANEL,
-            fg=MUTED,
+            bg=SOFT_BLUE,
+            fg=BLUE,
+            anchor="w",
+            padx=12,
+            pady=8,
             font=("Microsoft YaHei UI", 9),
         )
-        self.preview_summary.pack(anchor="w", padx=20, pady=(8, 10))
+        self.preview_summary.pack(fill="x", padx=20, pady=(10, 13))
+
+        tk.Label(
+            self.preview_card,
+            text="出售设置",
+            bg=PANEL,
+            fg=TEXT,
+            font=("Microsoft YaHei UI", 10, "bold"),
+        ).pack(anchor="w", padx=20, pady=(0, 8))
 
         pricing = tk.Frame(self.preview_card, bg=PANEL)
         pricing.pack(fill="x", padx=20)
@@ -492,6 +710,8 @@ class SteamQuickSellApp:
             anchor="w",
             padx=12,
             pady=10,
+            highlightbackground=LINE,
+            highlightthickness=1,
             font=("Microsoft YaHei UI", 9),
         )
         self.quote_label.pack(fill="x", padx=20, pady=(12, 8))
@@ -507,22 +727,35 @@ class SteamQuickSellApp:
             activebackground=PANEL,
             activeforeground=TEXT,
             selectcolor=PANEL_2,
+            wraplength=820,
+            justify="left",
             font=("Microsoft YaHei UI", 9),
         )
         self.confirm_check.pack(anchor="w", padx=20)
         self.sell_button = self.button(
-            self.preview_card, "一键出售", self.sell, RED, "white"
+            self.preview_card, "确认并一键出售", self.sell, RED, "white"
         )
         self.sell_button.pack(fill="x", padx=20, pady=(10, 18))
 
         self.progress_card = self.card(self.workspace)
+        progress_header = tk.Frame(self.progress_card, bg=PANEL)
+        progress_header.pack(fill="x", padx=20, pady=(16, 10))
         tk.Label(
-            self.progress_card,
+            progress_header,
+            text="任务",
+            bg=SOFT_GREEN,
+            fg=GREEN,
+            padx=9,
+            pady=4,
+            font=("Microsoft YaHei UI", 8, "bold"),
+        ).pack(side="left")
+        tk.Label(
+            progress_header,
             text="出售进度",
             bg=PANEL,
             fg=TEXT,
             font=("Microsoft YaHei UI", 13, "bold"),
-        ).pack(anchor="w", padx=20, pady=(15, 8))
+        ).pack(side="left", padx=(10, 0))
         self.progress_text = tk.Label(
             self.progress_card,
             text="准备中…",
@@ -555,7 +788,8 @@ class SteamQuickSellApp:
             selectbackground="#dceef8",
             selectforeground=TEXT,
             relief="flat",
-            highlightthickness=0,
+            highlightbackground=LINE,
+            highlightthickness=1,
             font=("Microsoft YaHei UI", 9),
         )
         self.result_list.pack(fill="both", expand=True, padx=20, pady=(8, 16))
@@ -571,20 +805,63 @@ class SteamQuickSellApp:
         )
 
     def update_scroll_region(self, _event=None):
-        bounds = self.canvas.bbox("all")
-        if bounds:
-            self.canvas.configure(scrollregion=(0, 0, bounds[2], bounds[3] + 12))
+        canvas_width = max(1, self.canvas.winfo_width())
+        viewport_height = max(1, self.canvas.winfo_height())
+        requested_height = max(1, self.scroll_content.winfo_reqheight())
+        content_height = max(viewport_height, requested_height)
+        self.canvas.itemconfigure(
+            self.canvas_window,
+            width=canvas_width,
+            height=content_height,
+        )
+        self.canvas.configure(
+            scrollregion=(0, 0, canvas_width, content_height),
+        )
+        self.clamp_scroll_position()
 
     def resize_scroll_content(self, event):
-        self.canvas.itemconfigure(self.canvas_window, width=event.width)
+        self.canvas.itemconfigure(
+            self.canvas_window,
+            width=max(1, event.width),
+            height=max(1, event.height),
+        )
         self.update_scroll_region()
 
-    def on_mouse_wheel(self, event):
-        bounds = self.canvas.bbox("all")
-        if not bounds or bounds[3] <= self.canvas.winfo_height():
+    def clamp_scroll_position(self):
+        viewport_height = max(1, self.canvas.winfo_height())
+        content_height = max(1, self.scroll_content.winfo_height())
+        if content_height <= viewport_height + 1:
+            self.canvas.yview_moveto(0)
             return
-        steps = -1 if event.delta > 0 else 1
-        self.canvas.yview_scroll(steps * 3, "units")
+
+        first, last = self.canvas.yview()
+        if first < 0:
+            self.canvas.yview_moveto(0)
+        elif last > 1:
+            visible_fraction = max(0, last - first)
+            self.canvas.yview_moveto(max(0, 1 - visible_fraction))
+
+    def on_mouse_wheel(self, event):
+        viewport_height = max(1, self.canvas.winfo_height())
+        content_height = max(1, self.scroll_content.winfo_height())
+        if content_height <= viewport_height + 1:
+            self.canvas.yview_moveto(0)
+            return "break"
+        if not event.delta:
+            return "break"
+
+        direction = -1 if event.delta > 0 else 1
+        first, last = self.canvas.yview()
+        if direction < 0 and first <= 0.0001:
+            self.canvas.yview_moveto(0)
+            return "break"
+        if direction > 0 and last >= 0.9999:
+            visible_fraction = max(0, last - first)
+            self.canvas.yview_moveto(max(0, 1 - visible_fraction))
+            return "break"
+
+        self.canvas.yview_scroll(direction, "units")
+        self.clamp_scroll_position()
         return "break"
 
     @staticmethod
@@ -600,8 +877,10 @@ class SteamQuickSellApp:
             disabledforeground="#9aa8b3",
             relief="flat",
             cursor="hand2",
+            borderwidth=0,
+            highlightthickness=0,
             padx=16,
-            pady=9,
+            pady=10,
             font=("Microsoft YaHei UI", 10, "bold"),
         )
 
@@ -617,6 +896,7 @@ class SteamQuickSellApp:
             highlightbackground=LINE,
             highlightcolor=BLUE,
             highlightthickness=1,
+            bd=0,
             font=("Microsoft YaHei UI", 11),
         )
 
@@ -627,7 +907,7 @@ class SteamQuickSellApp:
             text=text,
             bg=PANEL,
             fg=MUTED,
-            font=("Microsoft YaHei UI", 9),
+            font=("Microsoft YaHei UI", 8, "bold"),
         )
 
     def check_for_updates(self, silent=False):
@@ -959,7 +1239,7 @@ class SteamQuickSellApp:
         logged_in = bool(status.get("loggedIn"))
         if logged_in:
             self.status_label.configure(
-                text=f"● 已登录 · {status.get('steamId', '')}", fg=GREEN
+                text="● Steam 已连接", fg=GREEN
             )
             self.connection_panel.pack_forget()
             self.workspace.pack(fill="both", expand=True)
@@ -1062,7 +1342,7 @@ class SteamQuickSellApp:
         )
 
     def reset_scan_buttons(self):
-        self.scan_button.configure(state="normal", text="扫描库存")
+        self.scan_button.configure(state="normal", text="扫描并自定义价格")
         self.item_lowest_button.configure(
             state="normal",
             text="以市场底价出售",
@@ -1103,10 +1383,11 @@ class SteamQuickSellApp:
             ),
         )
         self.items_tree.delete(*self.items_tree.get_children())
-        for group in preview.get("groups", []):
+        for index, group in enumerate(preview.get("groups", [])):
             self.items_tree.insert(
                 "",
                 "end",
+                tags=("even" if index % 2 == 0 else "odd",),
                 values=(
                     group.get("name", ""),
                     group.get("appName", ""),
@@ -1349,7 +1630,7 @@ class SteamQuickSellApp:
 
     def sell_failed(self, error):
         self.sale_in_progress = False
-        self.sell_button.configure(text="一键出售")
+        self.sell_button.configure(text="确认并一键出售")
         self.update_sell_state()
         self.show_error(error)
 
@@ -1357,7 +1638,7 @@ class SteamQuickSellApp:
         self.preview = None
         self.progress_card.pack(fill="both", expand=True, pady=(0, 12))
         self.job_polling = True
-        self.sell_button.configure(text="一键出售", state="disabled")
+        self.sell_button.configure(text="确认并一键出售", state="disabled")
         self.render_job(job)
         self.root.after_idle(lambda: self.canvas.yview_moveto(1.0))
         self.root.after(800, lambda: self.poll_job(job.get("id")))
