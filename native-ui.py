@@ -30,7 +30,7 @@ from update_support import (
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / ".data"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 BG = "#f3f6fa"
 PANEL = "#ffffff"
 PANEL_2 = "#f7f9fc"
@@ -83,6 +83,8 @@ class SteamQuickSellApp:
         self.refresh_mode = "exact"
         self.refresh_cards_only = False
         self.refresh_card_price_mode = "lowest"
+        self.refresh_weapon_cases_only = False
+        self.refresh_case_price_mode = "lowest"
         self.refresh_item_price_mode = None
         self.update_info = None
         self.update_checking = False
@@ -231,7 +233,7 @@ class SteamQuickSellApp:
         ).pack(side="left")
         tk.Label(
             kicker,
-            text=f"  v{APP_VERSION}  TEST",
+            text=f"  v{APP_VERSION}",
             bg=SOFT_BLUE,
             fg=BLUE,
             padx=7,
@@ -581,6 +583,87 @@ class SteamQuickSellApp:
             "#76500f",
         )
         self.cards_buy_order_button.grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            padx=(5, 0),
+        )
+
+        cases_card = self.card(self.workspace)
+        cases_card.pack(fill="x", pady=(0, 14))
+        module_three_header = tk.Frame(cases_card, bg=PANEL)
+        module_three_header.pack(fill="x", padx=20, pady=(17, 8))
+        tk.Label(
+            module_three_header,
+            text="03",
+            bg=SOFT_AMBER,
+            fg="#76500f",
+            padx=9,
+            pady=4,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left")
+        module_three_titles = tk.Frame(module_three_header, bg=PANEL)
+        module_three_titles.pack(side="left", padx=(10, 0))
+        tk.Label(
+            module_three_titles,
+            text="CS2 武器箱市场出售",
+            bg=PANEL,
+            fg=TEXT,
+            font=("Microsoft YaHei UI", 13, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            module_three_titles,
+            text="自动识别库存中的全部可上架武器箱，并逐种读取实时市场价格",
+            bg=PANEL,
+            fg=MUTED,
+            font=("Microsoft YaHei UI", 8),
+        ).pack(anchor="w", pady=(2, 0))
+        tk.Label(
+            module_three_header,
+            text="武器箱",
+            bg=PANEL_2,
+            fg=MUTED,
+            padx=9,
+            pady=4,
+            font=("Microsoft YaHei UI", 8, "bold"),
+        ).pack(side="right")
+        tk.Label(
+            cases_card,
+            text=(
+                "仅扫描 CS2 武器箱，不包含纪念包、胶囊等其他容器。"
+                "提交前请核对每种武器箱的价格和可售数量。"
+            ),
+            bg=PANEL,
+            fg=MUTED,
+            font=("Microsoft YaHei UI", 9),
+            wraplength=820,
+            justify="left",
+        ).pack(anchor="w", padx=20, pady=(0, 11))
+        case_actions = tk.Frame(cases_card, bg=PANEL)
+        case_actions.pack(fill="x", padx=20, pady=(0, 16))
+        case_actions.grid_columnconfigure(0, weight=1)
+        case_actions.grid_columnconfigure(1, weight=1)
+        self.cases_button = self.button(
+            case_actions,
+            "以市场底价出售全部武器箱",
+            lambda: self.scan_weapon_cases("lowest"),
+            SOFT_GREEN,
+            "#21694f",
+        )
+        self.cases_button.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=(0, 5),
+        )
+        self.cases_buy_order_button = self.button(
+            case_actions,
+            "以最高求购价出售全部武器箱",
+            lambda: self.scan_weapon_cases("highest_buy"),
+            SOFT_AMBER,
+            "#76500f",
+        )
+        self.cases_buy_order_button.grid(
             row=0,
             column=1,
             sticky="ew",
@@ -1272,6 +1355,8 @@ class SteamQuickSellApp:
             self.item_highest_button,
             self.cards_button,
             self.cards_buy_order_button,
+            self.cases_button,
+            self.cases_buy_order_button,
         ):
             control.configure(state=state)
         if not enabled:
@@ -1288,6 +1373,8 @@ class SteamQuickSellApp:
         self.item_highest_button.configure(state="disabled")
         self.cards_button.configure(state="disabled")
         self.cards_buy_order_button.configure(state="disabled")
+        self.cases_button.configure(state="disabled")
+        self.cases_buy_order_button.configure(state="disabled")
         if item_price_mode == "highest_buy":
             self.item_highest_button.configure(text="正在读取最高求购价…")
         elif item_price_mode == "lowest":
@@ -1315,6 +1402,8 @@ class SteamQuickSellApp:
         self.item_highest_button.configure(state="disabled")
         self.cards_button.configure(state="disabled")
         self.cards_buy_order_button.configure(state="disabled")
+        self.cases_button.configure(state="disabled")
+        self.cases_buy_order_button.configure(state="disabled")
         active_button = (
             self.cards_buy_order_button
             if card_price_mode == "highest_buy"
@@ -1341,6 +1430,40 @@ class SteamQuickSellApp:
             self.scan_failed,
         )
 
+    def scan_weapon_cases(self, case_price_mode):
+        self.scan_button.configure(state="disabled")
+        self.item_lowest_button.configure(state="disabled")
+        self.item_highest_button.configure(state="disabled")
+        self.cards_button.configure(state="disabled")
+        self.cards_buy_order_button.configure(state="disabled")
+        self.cases_button.configure(state="disabled")
+        self.cases_buy_order_button.configure(state="disabled")
+        active_button = (
+            self.cases_buy_order_button
+            if case_price_mode == "highest_buy"
+            else self.cases_button
+        )
+        active_button.configure(
+            text=(
+                "正在读取武器箱与最高求购价…"
+                if case_price_mode == "highest_buy"
+                else "正在读取武器箱与市场底价…"
+            )
+        )
+        self.run_async(
+            lambda: self.api(
+                "/api/preview",
+                "POST",
+                {
+                    "weaponCasesOnly": True,
+                    "casePriceMode": case_price_mode,
+                },
+                timeout=240,
+            ),
+            self.render_preview,
+            self.scan_failed,
+        )
+
     def reset_scan_buttons(self):
         self.scan_button.configure(state="normal", text="扫描并自定义价格")
         self.item_lowest_button.configure(
@@ -1359,6 +1482,14 @@ class SteamQuickSellApp:
             state="normal",
             text="按最高求购价扫描（优先立即成交）",
         )
+        self.cases_button.configure(
+            state="normal",
+            text="以市场底价出售全部武器箱",
+        )
+        self.cases_buy_order_button.configure(
+            state="normal",
+            text="以最高求购价出售全部武器箱",
+        )
 
     def scan_failed(self, error):
         self.reset_scan_buttons()
@@ -1370,6 +1501,7 @@ class SteamQuickSellApp:
         market_price_mode = (
             preview.get("marketPriceMode")
             or preview.get("cardPriceMode")
+            or preview.get("casePriceMode")
             or preview.get("itemPriceMode")
         )
         self.items_tree.heading(
@@ -1438,6 +1570,8 @@ class SteamQuickSellApp:
         item_kind = (
             "集换式卡牌"
             if preview.get("tradingCardsOnly")
+            else "武器箱"
+            if preview.get("weaponCasesOnly")
             else "普通物品"
         )
         if preview.get("truncated"):
@@ -1462,6 +1596,8 @@ class SteamQuickSellApp:
             warnings.append(
                 "没有找到可出售的集换式卡牌"
                 if preview.get("tradingCardsOnly")
+                else "没有找到可出售的 CS2 武器箱"
+                if preview.get("weaponCasesOnly")
                 else "没有找到名称匹配且可出售的物品"
             )
         if warnings and show_warnings:
@@ -1619,6 +1755,12 @@ class SteamQuickSellApp:
         self.refresh_card_price_mode = (
             self.preview.get("cardPriceMode") or "lowest"
         )
+        self.refresh_weapon_cases_only = bool(
+            self.preview.get("weaponCasesOnly")
+        )
+        self.refresh_case_price_mode = (
+            self.preview.get("casePriceMode") or "lowest"
+        )
         self.refresh_item_price_mode = self.preview.get("itemPriceMode")
         self.sale_in_progress = True
         self.sell_button.configure(state="disabled", text="正在创建任务…")
@@ -1674,7 +1816,11 @@ class SteamQuickSellApp:
         )
 
     def refresh_inventory_after_job(self, result_message):
-        if not self.refresh_query and not self.refresh_cards_only:
+        if (
+            not self.refresh_query
+            and not self.refresh_cards_only
+            and not self.refresh_weapon_cases_only
+        ):
             self.sale_in_progress = False
             messagebox.showinfo("上架结果", result_message)
             return
@@ -1684,13 +1830,20 @@ class SteamQuickSellApp:
         self.item_highest_button.configure(state="disabled")
         self.cards_button.configure(state="disabled")
         self.cards_buy_order_button.configure(state="disabled")
-        payload = (
-            {
+        self.cases_button.configure(state="disabled")
+        self.cases_buy_order_button.configure(state="disabled")
+        if self.refresh_cards_only:
+            payload = {
                 "tradingCardsOnly": True,
                 "cardPriceMode": self.refresh_card_price_mode,
             }
-            if self.refresh_cards_only
-            else {
+        elif self.refresh_weapon_cases_only:
+            payload = {
+                "weaponCasesOnly": True,
+                "casePriceMode": self.refresh_case_price_mode,
+            }
+        else:
+            payload = {
                 "name": self.refresh_query,
                 "mode": self.refresh_mode,
                 **(
@@ -1699,7 +1852,6 @@ class SteamQuickSellApp:
                     else {}
                 ),
             }
-        )
 
         def refreshed(preview):
             self.sale_in_progress = False

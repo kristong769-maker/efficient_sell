@@ -30,6 +30,16 @@ function itemMatches(description, query, mode = "exact") {
     : values.some((value) => value === needle);
 }
 
+function isWeaponCase(description, appId, contextId) {
+  if (String(appId) !== "730" || String(contextId) !== "2") return false;
+  const hasWeaponCaseType = (description?.tags || []).some(
+    (tag) => tag.internal_name === "CSGO_Type_WeaponCase"
+  );
+  if (!hasWeaponCaseType) return false;
+  const marketHashName = String(description?.market_hash_name || "").trim();
+  return /\bCase(?:\s+\d+)?$/i.test(marketHashName);
+}
+
 function normalizeMarketPriceMode(value) {
   if (value === "lowest" || value === "highest_buy") return value;
   return null;
@@ -284,6 +294,7 @@ module.exports = {
   highestBuyOrderFromListingHtml,
   highestBuyOrderFromHistogram,
   itemMatches,
+  isWeaponCase,
   marketListingKey,
   marketListingUrl,
   normalizeName,

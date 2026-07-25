@@ -15,6 +15,7 @@ const {
   highestBuyOrderFromListingHtml,
   highestBuyOrderFromHistogram,
   itemMatches,
+  isWeaponCase,
   marketListingKey,
   marketListingUrl,
   normalizeMarketPriceMode,
@@ -362,7 +363,9 @@ async function scanMatches(steamId, query, mode, options = {}) {
   if (!contexts.length) throw new Error("当前账号没有可读取的 Steam 库存");
   const targetContexts = options.tradingCardsOnly
     ? contexts.filter((context) => context.appId === "753" && context.contextId === "6")
-    : contexts;
+    : options.weaponCasesOnly
+      ? contexts.filter((context) => context.appId === "730" && context.contextId === "2")
+      : contexts;
   if (!targetContexts.length) {
     return { matches: [], scannedAssets: 0, contexts: 0, errors: [] };
   }
@@ -391,8 +394,15 @@ async function scanMatches(steamId, query, mode, options = {}) {
             const description = descriptions.get(`${asset.classid}_${asset.instanceid || "0"}`);
             if (!description || Number(description.marketable) !== 1) continue;
             const tradingCard = isTradingCard(description, asset, context);
+            const weaponCase = isWeaponCase(
+              description,
+              asset.appid || context.appId,
+              asset.contextid || context.contextId
+            );
             if (options.tradingCardsOnly) {
               if (!tradingCard) continue;
+            } else if (options.weaponCasesOnly) {
+              if (!weaponCase) continue;
             } else if (!itemMatches(description, query, mode)) {
               continue;
             }
@@ -405,6 +415,7 @@ async function scanMatches(steamId, query, mode, options = {}) {
               name: description.name || description.market_name || description.market_hash_name,
               marketHashName: description.market_hash_name || description.market_name || description.name,
               isTradingCard: tradingCard,
+              isWeaponCase: weaponCase,
               publisherFee: Number.isFinite(Number(description.market_fee))
                 ? Number(description.market_fee)
                 : null,
@@ -442,6 +453,7 @@ function groupMatches(matches) {
       count: 0,
       iconUrl: item.iconUrl,
       isTradingCard: item.isTradingCard,
+      isWeaponCase: item.isWeaponCase,
       lowestPriceFormatted: item.lowestPriceFormatted || null,
       highestBuyOrderFormatted: item.highestBuyOrderFormatted || null,
       highestBuyOrderQuantity: item.highestBuyOrderQuantity || 0,
@@ -715,15 +727,26 @@ async function createPreview(body) {
   const session = await getSession();
   if (!session) throw new Error("Steam 登录已失效，请重新登录");
   const tradingCardsOnly = body.tradingCardsOnly === true;
+  const weaponCasesOnly = body.weaponCasesOnly === true;
+  if (tradingCardsOnly && weaponCasesOnly) {
+    throw new Error("库存分类条件无效");
+  }
   const cardPriceMode = tradingCardsOnly
     ? normalizeMarketPriceMode(body.cardPriceMode) || "lowest"
     : null;
-  const itemPriceMode = tradingCardsOnly
+  const casePriceMode = weaponCasesOnly
+    ? normalizeMarketPriceMode(body.casePriceMode) || "lowest"
+    : null;
+  const itemPriceMode = tradingCardsOnly || weaponCasesOnly
     ? null
     : normalizeMarketPriceMode(body.itemPriceMode);
-  const marketPriceMode = cardPriceMode || itemPriceMode;
-  const query = tradingCardsOnly ? "全部集换式卡牌" : String(body.name || "").trim();
-  if (!tradingCardsOnly && (!query || query.length > 160)) {
+  const marketPriceMode = cardPriceMode || casePriceMode || itemPriceMode;
+  const query = tradingCardsOnly
+    ? "全部集换式卡牌"
+    : weaponCasesOnly
+      ? "全部武器箱"
+      : String(body.name || "").trim();
+  if (!tradingCardsOnly && !weaponCasesOnly && (!query || query.length > 160)) {
     throw new Error("请输入有效的物品名称");
   }
   const mode = body.mode === "contains" ? "contains" : "exact";
@@ -731,7 +754,7 @@ async function createPreview(body) {
     session.steamId,
     query,
     mode,
-    { tradingCardsOnly }
+    { tradingCardsOnly, weaponCasesOnly }
   );
   let priceErrors = [];
   let wallet = walletCache?.value || null;
@@ -769,7 +792,9 @@ async function createPreview(body) {
     query,
     mode,
     tradingCardsOnly,
+    weaponCasesOnly,
     cardPriceMode,
+    casePriceMode,
     itemPriceMode,
     marketPriceMode,
     marketPriceTime: marketPriceMode ? Date.now() : null,
@@ -803,7 +828,9 @@ async function createPreview(body) {
     query,
     mode,
     tradingCardsOnly,
+    weaponCasesOnly,
     cardPriceMode,
+    casePriceMode,
     itemPriceMode,
     marketPriceMode,
     totalFound,

@@ -11,6 +11,7 @@ const {
   highestBuyOrderFromListingHtml,
   highestBuyOrderFromHistogram,
   itemMatches,
+  isWeaponCase,
   marketListingKey,
   marketListingUrl,
   normalizeMarketPriceMode,
@@ -32,6 +33,59 @@ test("名称精确匹配忽略大小写和全半角", () => {
   assert.equal(itemMatches({ name: "Ｆｅｖｅｒ Case" }, "fever case", "exact"), true);
   assert.equal(itemMatches({ name: "Fever Case" }, "fever", "exact"), false);
   assert.equal(itemMatches({ name: "Fever Case" }, "fever", "contains"), true);
+});
+
+test("只识别 CS2 武器箱并排除其他容器", () => {
+  const weaponCaseTag = {
+    category: "Type",
+    internal_name: "CSGO_Type_WeaponCase"
+  };
+  assert.equal(
+    isWeaponCase(
+      { market_hash_name: "Fever Case", tags: [weaponCaseTag] },
+      730,
+      2
+    ),
+    true
+  );
+  assert.equal(
+    isWeaponCase(
+      { market_hash_name: "CS:GO Weapon Case 2", tags: [weaponCaseTag] },
+      "730",
+      "2"
+    ),
+    true
+  );
+  assert.equal(
+    isWeaponCase(
+      {
+        market_hash_name: "Stockholm 2021 Dust II Souvenir Package",
+        tags: [weaponCaseTag]
+      },
+      730,
+      2
+    ),
+    false
+  );
+  assert.equal(
+    isWeaponCase(
+      {
+        market_hash_name: "Fever Case",
+        tags: [{ category: "Type", internal_name: "CSGO_Type_StickerCapsule" }]
+      },
+      730,
+      2
+    ),
+    false
+  );
+  assert.equal(
+    isWeaponCase(
+      { market_hash_name: "Fever Case", tags: [weaponCaseTag] },
+      753,
+      6
+    ),
+    false
+  );
 });
 
 test("普通物品市场定价模式和跨游戏市场键", () => {
