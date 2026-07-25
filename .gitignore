@@ -1,0 +1,6 @@
+node_modules/
+.data/
+__pycache__/
+*.pyc
+npm-debug.log*
+*.log

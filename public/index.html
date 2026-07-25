@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Steam 一键出售</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">LOCAL STEAM TOOL</div>
+        <h1>库存一键出售</h1>
+      </div>
+      <div id="account" class="account">
+        <span id="statusDot" class="dot"></span>
+        <span id="statusText">正在检查登录状态…</span>
+        <button id="logoutButton" class="text-button hidden" type="button">退出工具登录</button>
+      </div>
+    </header>
+
+    <section id="loginPanel" class="card login-card hidden">
+      <div>
+        <h2>先连接 Steam</h2>
+        <p>登录会在独立的 Steam 官方页面完成。工具不会读取或保存你的密码。</p>
+      </div>
+      <button id="loginButton" class="primary" type="button">打开 Steam 登录</button>
+    </section>
+
+    <section id="workspace" class="workspace hidden">
+      <section class="card form-card">
+        <div class="step-label"><span>1</span> 查找物品</div>
+        <label for="itemName">物品名称</label>
+        <div class="search-row">
+          <input id="itemName" type="text" maxlength="160"
+                 placeholder="例如：Fever Case / 狂牙大行动武器箱" autocomplete="off">
+          <button id="scanButton" class="primary" type="button">扫描库存</button>
+        </div>
+        <div class="radio-row">
+          <label><input type="radio" name="matchMode" value="exact" checked> 精确匹配</label>
+          <label><input type="radio" name="matchMode" value="contains"> 包含关键词</label>
+        </div>
+        <p class="hint">会扫描所有游戏库存，仅显示可在社区市场出售的匹配物品。</p>
+      </section>
+
+      <section id="previewPanel" class="card preview-card hidden">
+        <div class="step-label"><span>2</span> 核对与定价</div>
+        <div class="summary-grid">
+          <div><strong id="matchCount">0</strong><span>匹配数量</span></div>
+          <div><strong id="contextCount">0</strong><span>已扫描库存</span></div>
+          <div><strong id="assetCount">0</strong><span>已检查物品</span></div>
+        </div>
+        <div id="warningBox" class="warning hidden"></div>
+        <div id="itemGroups" class="item-groups"></div>
+
+        <div class="pricing">
+          <div>
+            <label for="quantity">出售数量</label>
+            <input id="quantity" type="number" min="1" value="1" inputmode="numeric">
+            <button id="allButton" class="text-button inline" type="button">全部</button>
+          </div>
+          <div>
+            <label for="price">每件价格 <span id="currencyCode"></span></label>
+            <input id="price" type="text" inputmode="decimal" placeholder="例如 1.00">
+          </div>
+          <div>
+            <label for="priceMode">价格含义</label>
+            <select id="priceMode">
+              <option value="buyer">买家支付总价</option>
+              <option value="receive">卖家实收金额</option>
+            </select>
+          </div>
+        </div>
+        <div id="quote" class="quote">输入价格后显示手续费预估</div>
+        <label class="confirm-check">
+          <input id="confirmCheck" type="checkbox">
+          我已核对物品、数量和每件价格，确认创建市场挂单
+        </label>
+        <button id="sellButton" class="danger" type="button" disabled>一键出售</button>
+      </section>
+
+      <section id="progressPanel" class="card progress-card hidden">
+        <div class="step-label"><span>3</span> 上架进度</div>
+        <div class="progress-heading">
+          <strong id="progressText">准备中…</strong>
+          <span id="progressNumbers"></span>
+        </div>
+        <div class="progress-track"><div id="progressBar"></div></div>
+        <div id="resultSummary" class="result-summary"></div>
+        <div id="resultList" class="result-list"></div>
+      </section>
+    </section>
+
+    <div id="toast" class="toast hidden" role="status"></div>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

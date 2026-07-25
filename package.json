@@ -1,0 +1,17 @@
+{
+  "name": "steam-quick-sell",
+  "version": "1.0.1",
+  "private": true,
+  "description": "按物品名称批量预览并上架 Steam 库存物品的本地桌面工具",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright-core": "^1.55.0"
+  }
+}
