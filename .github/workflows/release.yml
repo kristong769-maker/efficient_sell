@@ -1,0 +1,59 @@
+name: Publish Windows release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify tag matches package version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match package version v$version"
+          }
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run Node tests
+        run: npm test
+
+      - name: Run Python update tests
+        run: python -m unittest discover -s test -p "test_*.py"
+
+      - name: Build verified release package
+        shell: pwsh
+        run: ./scripts/build-release.ps1
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = Get-ChildItem dist -Filter "efficent_sell-*.zip" | Select-Object -First 1
+          $checksum = Get-ChildItem dist -Filter "*.zip.sha256" | Select-Object -First 1
+          gh release create $env:GITHUB_REF_NAME `
+            $zip.FullName `
+            $checksum.FullName `
+            --verify-tag `
+            --generate-notes `
+            --title "efficent_sell $env:GITHUB_REF_NAME"

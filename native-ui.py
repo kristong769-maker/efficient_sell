@@ -12,14 +12,25 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import webbrowser
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from update_support import (
+    LATEST_RELEASE_API,
+    UpdateError,
+    download_file,
+    download_text,
+    fetch_latest_release,
+    parse_sha256_file,
+    select_release_update,
+    sha256_file,
+)
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / ".data"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 BG = "#f5f7fa"
 PANEL = "#ffffff"
 PANEL_2 = "#f8fafc"
@@ -67,11 +78,19 @@ class SteamQuickSellApp:
         self.refresh_mode = "exact"
         self.refresh_cards_only = False
         self.refresh_card_price_mode = "lowest"
+        self.update_info = None
+        self.update_checking = False
+        self.update_downloading = False
+        self.sale_in_progress = False
+        self.closing = False
 
         self.configure_styles()
         self.build_ui()
         self.set_controls_enabled(False)
         self.run_async(self.start_backend, self.backend_ready, self.backend_failed)
+        self.root.after(450, self.show_previous_update_result)
+        if os.environ.get("STEAM_QUICK_SELL_DISABLE_UPDATE_CHECK") != "1":
+            self.root.after(1200, lambda: self.check_for_updates(silent=True))
 
     @staticmethod
     def find_free_port():
@@ -160,6 +179,7 @@ class SteamQuickSellApp:
         self.root.bind_all("<MouseWheel>", self.on_mouse_wheel)
 
         header = tk.Frame(outer, bg=BG)
+        self.header = header
         header.pack(fill="x", pady=(0, 18))
         title_box = tk.Frame(header, bg=BG)
         title_box.pack(side="left")
@@ -186,6 +206,55 @@ class SteamQuickSellApp:
             font=("Microsoft YaHei UI", 10),
         )
         self.status_label.pack(side="right", anchor="s", pady=8)
+        self.update_check_button = tk.Button(
+            header,
+            text="检查更新",
+            command=self.check_for_updates,
+            bg=BG,
+            fg=BLUE,
+            activebackground=BG,
+            activeforeground=BLUE,
+            disabledforeground=MUTED,
+            relief="flat",
+            cursor="hand2",
+            font=("Microsoft YaHei UI", 9),
+        )
+        self.update_check_button.pack(
+            side="right",
+            anchor="s",
+            padx=(0, 14),
+            pady=5,
+        )
+
+        self.update_panel = self.card(outer)
+        update_text = tk.Frame(self.update_panel, bg=PANEL)
+        update_text.pack(side="left", fill="x", expand=True, padx=22, pady=17)
+        self.update_title = tk.Label(
+            update_text,
+            text="",
+            bg=PANEL,
+            fg=TEXT,
+            font=("Microsoft YaHei UI", 13, "bold"),
+        )
+        self.update_title.pack(anchor="w")
+        self.update_hint = tk.Label(
+            update_text,
+            text="",
+            bg=PANEL,
+            fg=MUTED,
+            justify="left",
+            wraplength=620,
+            font=("Microsoft YaHei UI", 9),
+        )
+        self.update_hint.pack(anchor="w", pady=(5, 0))
+        self.update_action_button = self.button(
+            self.update_panel,
+            "下载并安装",
+            self.download_and_install_update,
+            BLUE,
+            "white",
+        )
+        self.update_action_button.pack(side="right", padx=22, ipadx=8)
 
         self.connection_panel = self.card(outer)
         login_text = tk.Frame(self.connection_panel, bg=PANEL)
@@ -519,6 +588,236 @@ class SteamQuickSellApp:
             fg=MUTED,
             font=("Microsoft YaHei UI", 9),
         )
+
+    def check_for_updates(self, silent=False):
+        if self.update_checking or self.update_downloading:
+            return
+        self.update_checking = True
+        self.update_check_button.configure(text="检查中…", state="disabled")
+        api_url = os.environ.get(
+            "STEAM_QUICK_SELL_UPDATE_API_URL",
+            LATEST_RELEASE_API,
+        )
+
+        def checked(update):
+            self.update_checking = False
+            self.update_check_button.configure(state="normal")
+            self.update_info = update
+            if update.get("is_newer"):
+                self.show_update_available(update)
+                self.update_check_button.configure(text="发现新版本")
+            else:
+                self.update_panel.pack_forget()
+                self.update_check_button.configure(text="已是最新版")
+                self.root.after(2600, self.restore_update_check_text)
+
+        def failed(error):
+            self.update_checking = False
+            self.update_check_button.configure(text="检查更新", state="normal")
+            if not silent:
+                messagebox.showwarning("检查更新失败", str(error))
+
+        self.run_async(
+            lambda: select_release_update(
+                fetch_latest_release(api_url=api_url),
+                APP_VERSION,
+            ),
+            checked,
+            failed,
+        )
+
+    def restore_update_check_text(self):
+        if (
+            not self.update_checking
+            and not self.update_downloading
+            and not (self.update_info or {}).get("is_newer")
+        ):
+            self.update_check_button.configure(text="检查更新")
+
+    def show_update_available(self, update):
+        version = update.get("version", "")
+        notes = " ".join(str(update.get("notes") or "").split())
+        if len(notes) > 210:
+            notes = notes[:207].rstrip() + "…"
+        installable = bool(
+            update.get("zip_url")
+            and (update.get("sha256") or update.get("checksum_url"))
+        )
+        self.update_title.configure(text=f"发现新版本 v{version}")
+        if installable:
+            detail = notes or "新版已经可以下载，安装前会自动校验文件完整性。"
+            self.update_hint.configure(
+                text=f"{detail}\n更新期间程序会自动关闭，完成后重新启动。",
+            )
+            self.update_action_button.configure(
+                text="下载并安装",
+                command=self.download_and_install_update,
+                state="normal",
+                bg=BLUE,
+                fg="white",
+            )
+        else:
+            self.update_hint.configure(
+                text=(
+                    (notes + "\n" if notes else "")
+                    + "此 Release 没有可校验的自动更新包，请从发布页面手动下载。"
+                ),
+            )
+            self.update_action_button.configure(
+                text="查看发布页面",
+                command=self.open_release_page,
+                state="normal",
+                bg=PANEL_2,
+                fg=BLUE,
+            )
+        self.update_panel.pack(
+            fill="x",
+            pady=(0, 12),
+            after=self.header,
+        )
+        self.root.update_idletasks()
+        self.update_scroll_region()
+
+    def open_release_page(self):
+        url = str((self.update_info or {}).get("html_url") or "").strip()
+        if not url.startswith(
+            "https://github.com/kristong769-maker/efficient_sell/releases/"
+        ):
+            url = "https://github.com/kristong769-maker/efficient_sell/releases"
+        webbrowser.open(url)
+
+    def download_and_install_update(self):
+        update = self.update_info or {}
+        if self.update_downloading:
+            return
+        if self.sale_in_progress:
+            messagebox.showwarning(
+                "暂时不能更新",
+                "请等待当前上架任务和库存刷新完成后再更新。",
+            )
+            return
+        if not (
+            update.get("zip_url")
+            and (update.get("sha256") or update.get("checksum_url"))
+        ):
+            self.open_release_page()
+            return
+        version = str(update.get("version") or "")
+        if not messagebox.askyesno(
+            "安装程序更新",
+            f"确认下载并安装 v{version} 吗？\n\n"
+            "下载完成后程序会自动关闭、替换文件并重新启动。"
+            "\nSteam 登录状态和本地日志不会被删除。",
+        ):
+            return
+
+        self.update_downloading = True
+        self.set_controls_enabled(False)
+        self.update_check_button.configure(text="正在下载…", state="disabled")
+        self.update_action_button.configure(text="正在下载更新包…", state="disabled")
+
+        def downloaded(result):
+            self.update_action_button.configure(text="正在启动更新器…")
+            try:
+                self.launch_updater(result)
+            except Exception as error:
+                download_failed(error)
+
+        def download_failed(error):
+            self.update_downloading = False
+            self.update_check_button.configure(text="发现新版本", state="normal")
+            self.update_action_button.configure(
+                text="重试下载",
+                state="normal",
+                command=self.download_and_install_update,
+            )
+            if self.workspace.winfo_ismapped():
+                self.set_controls_enabled(True)
+                self.update_sell_state()
+            messagebox.showerror("更新下载失败", str(error))
+
+        self.run_async(
+            lambda: self.download_update_package(update),
+            downloaded,
+            download_failed,
+        )
+
+    @staticmethod
+    def download_update_package(update):
+        zip_name = Path(str(update.get("zip_name") or "")).name
+        if not zip_name or zip_name != str(update.get("zip_name") or ""):
+            raise UpdateError("更新包文件名无效")
+        expected = str(update.get("sha256") or "").lower()
+        if not expected:
+            checksum_text = download_text(update.get("checksum_url"))
+            expected = parse_sha256_file(checksum_text, zip_name)
+        update_dir = DATA_DIR / "updates"
+        package_path = update_dir / zip_name
+        download_file(update.get("zip_url"), package_path)
+        actual = sha256_file(package_path)
+        if actual != expected:
+            package_path.unlink(missing_ok=True)
+            raise UpdateError("更新包完整性校验失败，文件已删除")
+        return {
+            "package": package_path,
+            "sha256": actual,
+            "version": str(update.get("version") or ""),
+        }
+
+    def launch_updater(self, result):
+        updater_path = ROOT / "updater.py"
+        if not updater_path.exists():
+            raise UpdateError("程序目录缺少 updater.py")
+        python_executable = Path(sys.executable)
+        if python_executable.name.lower() == "python.exe":
+            pythonw = python_executable.with_name("pythonw.exe")
+            if pythonw.exists():
+                python_executable = pythonw
+        command = [
+            str(python_executable),
+            str(updater_path),
+            "--package",
+            str(result["package"]),
+            "--sha256",
+            result["sha256"],
+            "--version",
+            result["version"],
+            "--app-dir",
+            str(ROOT),
+            "--wait-pid",
+            str(os.getpid()),
+        ]
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            command,
+            cwd=str(ROOT),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=flags,
+            close_fds=True,
+        )
+        self.root.after(150, self.close)
+
+    def show_previous_update_result(self):
+        result_path = DATA_DIR / "update-result.json"
+        if not result_path.exists():
+            return
+        try:
+            result = json.loads(result_path.read_text(encoding="utf-8-sig"))
+            result_path.unlink()
+        except (OSError, json.JSONDecodeError):
+            return
+        if result.get("success"):
+            messagebox.showinfo(
+                "更新完成",
+                f"程序已成功更新到 v{result.get('version', APP_VERSION)}。",
+            )
+        else:
+            messagebox.showerror(
+                "更新失败",
+                str(result.get("message") or "更新器没有完成文件替换，已尝试恢复旧版本。"),
+            )
 
     def start_backend(self):
         node = shutil.which("node.exe") or shutil.which("node")
@@ -971,6 +1270,7 @@ class SteamQuickSellApp:
         self.refresh_card_price_mode = (
             self.preview.get("cardPriceMode") or "lowest"
         )
+        self.sale_in_progress = True
         self.sell_button.configure(state="disabled", text="正在创建任务…")
         self.run_async(
             lambda: self.api("/api/sell", "POST", payload),
@@ -979,6 +1279,7 @@ class SteamQuickSellApp:
         )
 
     def sell_failed(self, error):
+        self.sale_in_progress = False
         self.sell_button.configure(text="一键出售")
         self.update_sell_state()
         self.show_error(error)
@@ -1024,6 +1325,7 @@ class SteamQuickSellApp:
 
     def refresh_inventory_after_job(self, result_message):
         if not self.refresh_query and not self.refresh_cards_only:
+            self.sale_in_progress = False
             messagebox.showinfo("上架结果", result_message)
             return
         self.progress_text.configure(text="任务完成，正在更新库存…")
@@ -1043,6 +1345,7 @@ class SteamQuickSellApp:
         )
 
         def refreshed(preview):
+            self.sale_in_progress = False
             self.force_refresh_listing_page(preview)
             messagebox.showinfo(
                 "上架结果",
@@ -1050,6 +1353,7 @@ class SteamQuickSellApp:
             )
 
         def refresh_failed(error):
+            self.sale_in_progress = False
             self.scan_button.configure(state="normal", text="扫描库存")
             self.cards_button.configure(
                 state="normal",
@@ -1135,6 +1439,9 @@ class SteamQuickSellApp:
         messagebox.showerror("操作失败", str(error))
 
     def close(self):
+        if self.closing:
+            return
+        self.closing = True
         self.job_polling = False
         try:
             if self.backend and self.backend.poll() is None:

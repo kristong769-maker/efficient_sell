@@ -1,4 +1,4 @@
-# Steam 库存一键出售 v1.0.2
+# Steam 库存一键出售 v1.0.3
 
 这是一个仅在本机运行的 Windows 原生桌面工具。它直接复用正在运行的桌面 Steam
 客户端登录状态，不提供也不需要独立登录功能。工具会按用户输入的名称扫描全部
@@ -27,6 +27,21 @@ Steam 库存，并以自定义价格批量提交社区市场挂单。
 客户端自己管理。后台运行日志保存在 `.data/backend.log`。程序不会读取或保存
 Steam 密码，也不需要 API Key、共享密钥或身份密钥。
 
+## 自动更新
+
+程序启动后会在后台检查
+[`kristong769-maker/efficient_sell`](https://github.com/kristong769-maker/efficient_sell/releases)
+的最新正式 Release。发现更高版本时，页面顶部会显示“下载并安装”：
+
+1. 更新包及 SHA-256 校验文件从指定 GitHub 仓库下载。
+2. 下载完成后校验压缩包 SHA-256，并验证包内清单和每个文件的哈希值。
+3. 主程序退出后，独立更新器备份旧文件并安装新版本。
+4. `.data`、`node_modules` 和 Steam 登录状态不会被覆盖。
+5. 安装失败时会尝试恢复备份，重新启动后显示失败原因。
+
+`v1.0.2` 及更早版本没有自动更新器，因此现有用户需要手动安装一次 `v1.0.3`；
+从 `v1.0.3` 开始，后续正式版本可以在程序内一键更新。
+
 ## 安全设计
 
 - 上架前必须先预览匹配结果，并再次勾选确认。
@@ -47,7 +62,33 @@ Steam 密码，也不需要 API Key、共享密钥或身份密钥。
 ```powershell
 npm.cmd install
 npm.cmd test
+python -m unittest discover -s test -p "test_*.py"
 npm.cmd start
 ```
 
 如 Edge 不在默认路径，可设置 `EDGE_PATH` 环境变量指向 Edge 或 Chrome。
+
+## 发布新版本
+
+发布前需要把 `package.json`、`package-lock.json`、`native-ui.py` 和本文件中的
+版本号改为同一个 `x.y.z`。然后运行测试并生成一次本地发布包：
+
+```powershell
+npm.cmd test
+python -m unittest discover -s test -p "test_*.py"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
+```
+
+确认无误后提交并推送同版本标签，例如：
+
+```powershell
+git add .
+git commit -m "release: v1.0.4"
+git tag -a v1.0.4 -m "Steam 库存一键出售 v1.0.4"
+git push origin master
+git push origin v1.0.4
+```
+
+`.github/workflows/release.yml` 会在标签推送后自动运行测试，生成
+`efficent_sell-v1.0.4.zip` 和对应的 `.sha256`，并创建 GitHub Release。程序只把
+包含可校验更新包的正式 Release 识别为可一键安装版本。
