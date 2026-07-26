@@ -30,7 +30,7 @@ from update_support import (
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / ".data"
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 BG = "#f3f6fa"
 PANEL = "#ffffff"
 PANEL_2 = "#f7f9fc"
@@ -1775,8 +1775,8 @@ class SteamQuickSellApp:
             progress_text = "任务未开始"
         elif state == "finished":
             progress_text = job.get("statusText") or "任务完成"
-        elif state in ("queued", "preparing"):
-            progress_text = job.get("statusText") or "正在进行后台校验…"
+        elif job.get("statusText"):
+            progress_text = job.get("statusText")
         elif job.get("stabilityMode"):
             progress_text = (
                 f"检测到 Steam 限流，已切换单线程稳定模式…  "
@@ -1800,6 +1800,11 @@ class SteamQuickSellApp:
                 f"每件买家支付 {job.get('buyerPaysFormatted', '')} · "
                 f"预计实收 {job.get('sellerReceivesFormatted', '')}"
             )
+            if int(job.get("verifiedSucceeded", 0)):
+                summary += (
+                    f" · 核验确认成功 "
+                    f"{job.get('verifiedSucceeded', 0)} 件"
+                )
             if job.get("fatalError"):
                 summary += f" · {job.get('fatalError')}"
         self.result_summary.configure(text=summary)

@@ -7,6 +7,7 @@ const {
   buyerPriceForDesiredReceive,
   capMatchesToHighestBuyDemand,
   calculateFees,
+  classifySellFailure,
   currencyMetadata,
   extractMarketItemNameId,
   highestBuyOrderFromListingHtml,
@@ -142,6 +143,42 @@ test("从我的市场挂单资产中提取唯一库存键", () => {
       marketAssetKey(753, 6, 456)
     ].sort()
   );
+});
+
+test("出售失败按是否可重试及是否需要挂单核验分类", () => {
+  assert.deepEqual(classifySellFailure(429, "Too many requests"), {
+    fatal: false,
+    retryable: true,
+    requiresVerification: false
+  });
+  assert.deepEqual(classifySellFailure(408, "请求超时"), {
+    fatal: false,
+    retryable: true,
+    requiresVerification: true
+  });
+  assert.deepEqual(classifySellFailure(503, "服务器繁忙"), {
+    fatal: false,
+    retryable: true,
+    requiresVerification: true
+  });
+  assert.deepEqual(
+    classifySellFailure(0, "socket closed", { transportError: true }),
+    {
+      fatal: false,
+      retryable: true,
+      requiresVerification: true
+    }
+  );
+  assert.deepEqual(classifySellFailure(400, "物品不可出售"), {
+    fatal: false,
+    retryable: false,
+    requiresVerification: false
+  });
+  assert.deepEqual(classifySellFailure(403, "Access denied"), {
+    fatal: true,
+    retryable: false,
+    requiresVerification: false
+  });
 });
 
 test("普通物品市场定价模式和跨游戏市场键", () => {

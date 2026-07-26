@@ -344,7 +344,16 @@ function renderJob(job) {
   elements.progressBar.style.width = `${percent}%`;
   elements.resultSummary.textContent = job.preflightFailed
     ? job.fatalError || "后台校验未通过，请重新扫描后再试。"
-    : `成功 ${job.succeeded} 件 · 失败 ${job.failed} 件 · 每件买家支付 ${job.buyerPaysFormatted} · 预计实收 ${job.sellerReceivesFormatted}`;
+    : (
+      `成功 ${job.succeeded} 件 · 失败 ${job.failed} 件`
+      + ` · 临时重试 ${job.transientRetries || 0} 次`
+      + ` · 每件买家支付 ${job.buyerPaysFormatted}`
+      + ` · 预计实收 ${job.sellerReceivesFormatted}`
+    );
+  if (job.verifiedSucceeded > 0 && !job.preflightFailed) {
+    elements.resultSummary.textContent +=
+      ` · 核验确认成功 ${job.verifiedSucceeded} 件`;
+  }
   elements.resultList.replaceChildren();
   for (const result of job.results.slice().reverse()) {
     const line = document.createElement("div");

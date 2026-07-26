@@ -10,6 +10,7 @@ const {
   buyerPriceForDesiredReceive,
   capMatchesToHighestBuyDemand,
   calculateFees,
+  classifySellFailure,
   currencyMetadata,
   extractMarketItemNameId,
   formatMinor,
@@ -47,6 +48,7 @@ const SELL_REQUEST_INTERVAL_MS = Math.max(
   200,
   Number(process.env.STEAM_SELL_INTERVAL_MS || 400)
 );
+const SELL_RETRY_DELAYS_MS = [2000, 5000];
 const SCAN_CONCURRENCY = Math.min(
   6,
   Math.max(1, Number(process.env.STEAM_SCAN_CONCURRENCY || 4))
@@ -61,6 +63,9 @@ const HIGHEST_BUY_BATCH_TIMEOUT_MS = Number.isFinite(configuredHighestBuyTimeout
 const ACTIVE_LISTING_PAGE_SIZE = 100;
 const MAX_ACTIVE_LISTING_PAGES = 50;
 const ACTIVE_LISTING_TOTAL_TIMEOUT_MS = 10_000;
+const SELL_VERIFY_INVENTORY_TIMEOUT_MS = 10_000;
+const SELL_VERIFY_CONTEXT_CONCURRENCY = 2;
+const SELL_VERIFY_SETTLE_MS = 750;
 const NATIVE_MODE = process.env.STEAM_QUICK_SELL_NATIVE === "1";
 const STEAM_CLIENT_MODE = process.env.STEAM_QUICK_SELL_STEAM_CLIENT === "1";
 const STEAM_CDP_PORT = Number(process.env.STEAM_CDP_PORT || 8080);
@@ -249,6 +254,104 @@ async function fetchActiveMarketListingAssetKeys() {
     start = nextStart;
   }
   throw new Error("当前市场挂单数量过多，无法完成安全扫描");
+}
+
+function inventoryContextKey(appId, contextId) {
+  return `${String(appId)}|${String(contextId)}`;
+}
+
+async function fetchCurrentInventoryAssetKeys(steamId, items) {
+  const groupsByContext = new Map();
+  for (const item of items) {
+    const contextKey = inventoryContextKey(item.appId, item.contextId);
+    if (!groupsByContext.has(contextKey)) {
+      groupsByContext.set(contextKey, {
+        contextKey,
+        appId: String(item.appId),
+        contextId: String(item.contextId),
+        targetAssetIds: new Set()
+      });
+    }
+    groupsByContext.get(contextKey).targetAssetIds.add(String(item.assetId));
+  }
+
+  const groups = [...groupsByContext.values()];
+  const keys = new Set();
+  const verifiedContexts = new Set();
+  const errors = [];
+  const deadline = Date.now() + SELL_VERIFY_INVENTORY_TIMEOUT_MS;
+  let nextIndex = 0;
+
+  async function verifyContext() {
+    while (true) {
+      const groupIndex = nextIndex;
+      nextIndex += 1;
+      if (groupIndex >= groups.length) return;
+      const group = groups[groupIndex];
+      let startAssetId = "";
+      try {
+        for (let pageIndex = 0; pageIndex < 50; pageIndex += 1) {
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0) {
+            throw new Error("库存核验超时");
+          }
+          const inventoryUrl = new URL(
+            `https://steamcommunity.com/inventory/${steamId}/`
+            + `${group.appId}/${group.contextId}`
+          );
+          inventoryUrl.search = new URLSearchParams({
+            l: "schinese",
+            count: "2000",
+            ...(startAssetId ? { start_assetid: startAssetId } : {})
+          });
+          const payload = JSON.parse(await getText(inventoryUrl.href, {
+            timeoutMs: Math.max(1, Math.min(7000, remainingMs))
+          }));
+          if (payload?.success !== true && Number(payload?.success) !== 1) {
+            throw new Error("Steam 返回了无效库存数据");
+          }
+          for (const asset of payload.assets || []) {
+            const assetId = String(asset.assetid || asset.id || "");
+            if (group.targetAssetIds.has(assetId)) {
+              keys.add(
+                marketAssetKey(group.appId, group.contextId, assetId)
+              );
+            }
+          }
+          if (
+            [...group.targetAssetIds].every((assetId) => (
+              keys.has(marketAssetKey(group.appId, group.contextId, assetId))
+            ))
+            || !(
+              payload.more_items === true
+              || Number(payload.more_items) === 1
+            )
+          ) {
+            verifiedContexts.add(group.contextKey);
+            break;
+          }
+          const nextAssetId = String(payload.last_assetid || "");
+          if (!nextAssetId || nextAssetId === startAssetId) {
+            throw new Error("Steam 库存分页数据无效");
+          }
+          startAssetId = nextAssetId;
+          if (pageIndex === 49) {
+            throw new Error("库存物品过多，无法完成安全核验");
+          }
+        }
+      } catch (error) {
+        errors.push(`${group.contextKey}: ${errorMessage(error)}`);
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(SELL_VERIFY_CONTEXT_CONCURRENCY, groups.length) },
+      () => verifyContext()
+    )
+  );
+  return { keys, verifiedContexts, errors };
 }
 
 async function getWalletInfo(force = false) {
@@ -535,13 +638,26 @@ function groupMatches(matches) {
   return [...grouped.values()].sort((a, b) => b.count - a.count);
 }
 
-async function fetchLowestMarketBuyerPrice(appId, marketHashName, currencyId) {
+async function fetchLowestMarketBuyerPrice(
+  appId,
+  marketHashName,
+  currencyId,
+  deadline = Number.POSITIVE_INFINITY
+) {
   let lastError;
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) throw new Error("市场最低价读取超时");
+    const requestTimeoutMs = Math.max(1, Math.min(15_000, remainingMs));
     const page = await getSteamClientPage();
-    const result = await page.evaluate(async ({ itemAppId, itemName, walletCurrency }) => {
+    const result = await page.evaluate(async ({
+      itemAppId,
+      itemName,
+      walletCurrency,
+      timeoutMs
+    }) => {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15_000);
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const searchUrl = new URL("https://steamcommunity.com/market/search/render/");
         searchUrl.search = new URLSearchParams({
@@ -621,12 +737,18 @@ async function fetchLowestMarketBuyerPrice(appId, marketHashName, currencyId) {
     }, {
       itemAppId: String(appId),
       itemName: marketHashName,
-      walletCurrency: currencyId
+      walletCurrency: currencyId,
+      timeoutMs: requestTimeoutMs
     });
     if (result.buyerPrice > 0) return result;
     lastError = new Error(result.error || `Steam 返回 HTTP ${result.status}`);
     if (result.status !== 408 && result.status !== 429 && result.status < 500) break;
-    await sleep(1200 * (attempt + 1));
+    const retryWaitMs = Math.min(
+      1200 * (attempt + 1),
+      Math.max(0, deadline - Date.now())
+    );
+    if (retryWaitMs <= 0) break;
+    await sleep(retryWaitMs);
   }
   throw lastError || new Error("无法读取市场最低价");
 }
@@ -993,18 +1115,18 @@ function lotsFromPreview(preview, quantity) {
   return lots;
 }
 
-function isTransientListingFailure(status, message) {
-  if (status === 408 || status === 429 || status >= 500) return true;
-  return /try again|problem listing|temporar|too many|rate limit|server busy|稍后|频繁|重试|服务器繁忙/i
-    .test(String(message || ""));
+function listingFailure(status, message, transportError = false) {
+  return {
+    ok: false,
+    status: Number(status || 0),
+    message: String(message || "未知错误"),
+    ...classifySellFailure(status, message, { transportError })
+  };
 }
 
-async function postListing(session, item, sellerPrice, beforeAttempt) {
-  let lastResult;
-  let transientRetries = 0;
-  let sawTransientFailure = false;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    await beforeAttempt();
+async function postListingAttempt(session, item, sellerPrice, beforeAttempt) {
+  await beforeAttempt();
+  try {
     if (STEAM_CLIENT_MODE) {
       const result = await steamClientFetch(
         "https://steamcommunity.com/market/sellitem/",
@@ -1021,20 +1143,6 @@ async function postListing(session, item, sellerPrice, beforeAttempt) {
           }
         }
       );
-      if (result.status === 429) {
-        transientRetries += 1;
-        sawTransientFailure = true;
-        lastResult = { ok: false, message: "Steam 限流" };
-        await sleep(4000 * (attempt + 1));
-        continue;
-      }
-      if (result.status === 408) {
-        transientRetries += 1;
-        sawTransientFailure = true;
-        lastResult = { ok: false, message: "Steam 响应超时" };
-        await sleep(2500 * (attempt + 1));
-        continue;
-      }
       let data;
       try {
         data = JSON.parse(result.text);
@@ -1049,24 +1157,11 @@ async function postListing(session, item, sellerPrice, beforeAttempt) {
             || data.needs_mobile_confirmation
             || data.needs_email_confirmation
           ),
-          listingId: data.listingid || null,
-          transientRetries
+          listingId: data.listingid || null
         };
       }
       const message = String(data.message || data.error || `HTTP ${result.status}`);
-      lastResult = {
-        ok: false,
-        message
-      };
-      if (isTransientListingFailure(result.status, message)) {
-        transientRetries += 1;
-        sawTransientFailure = true;
-        if (attempt < 3) {
-          await sleep(1500 * (attempt + 1));
-          continue;
-        }
-      }
-      break;
+      return listingFailure(result.status, message);
     }
     const response = await browserContext.request.post(
       "https://steamcommunity.com/market/sellitem/",
@@ -1088,13 +1183,6 @@ async function postListing(session, item, sellerPrice, beforeAttempt) {
         }
       }
     );
-    if (response.status() === 429) {
-      transientRetries += 1;
-      sawTransientFailure = true;
-      lastResult = { ok: false, message: "Steam 限流" };
-      await sleep(4000 * (attempt + 1));
-      continue;
-    }
     const data = await response.json().catch(async () => ({
       success: false,
       message: (await response.text().catch(() => "")).slice(0, 200)
@@ -1108,26 +1196,14 @@ async function postListing(session, item, sellerPrice, beforeAttempt) {
           || data.needs_email_confirmation
         ),
         listingId: data.listingid || null,
-        transientRetries
+        status: response.status()
       };
     }
     const message = data.message || data.error || `HTTP ${response.status()}`;
-    lastResult = { ok: false, message: String(message) };
-    if (isTransientListingFailure(response.status(), message)) {
-      transientRetries += 1;
-      sawTransientFailure = true;
-      if (attempt < 3) {
-        await sleep(1500 * (attempt + 1));
-        continue;
-      }
-    }
-    break;
+    return listingFailure(response.status(), message);
+  } catch (error) {
+    return listingFailure(0, errorMessage(error), true);
   }
-  return {
-    ...(lastResult || { ok: false, message: "未知错误" }),
-    transientRetries,
-    transientFailure: sawTransientFailure
-  };
 }
 
 async function runSellJob(job, preview, lots) {
@@ -1180,14 +1256,28 @@ async function runSellJob(job, preview, lots) {
 
   job.state = "running";
   job.phase = "listing";
-  job.statusText = "正在提交 Steam 市场出售请求…";
-  job.updatedAt = Date.now();
+  job.listingStarted = true;
   const workerCount = Math.min(SELL_CONCURRENCY, lots.length);
   job.initialConcurrency = workerCount;
   job.concurrency = workerCount;
   job.transientRetries = 0;
+  job.transientFailures = 0;
+  job.retryQueued = 0;
+  job.retryRound = 0;
+  job.verifiedSucceeded = 0;
+  job.marketPricesRefreshed = 0;
   job.stabilityMode = false;
-  let nextIndex = 0;
+  job.statusText = `正在 ${workerCount} 路并行上架…`;
+  job.updatedAt = Date.now();
+  const records = lots.map((item) => ({
+    item,
+    attempts: 0,
+    finalized: false,
+    lastResult: null
+  }));
+  const maximumAttempts = 1 + SELL_RETRY_DELAYS_MS.length;
+  const wallet = preview.wallet || walletCache?.value;
+  const currency = currencyMetadata(wallet);
   let nextRequestAt = Date.now();
 
   async function waitForRequestSlot() {
@@ -1197,79 +1287,360 @@ async function runSellJob(job, preview, lots) {
     if (waitMs > 0) await sleep(waitMs);
   }
 
-  async function worker(workerIndex) {
-    // Avoid sending every first request in the exact same millisecond.
-    if (workerIndex > 0) await sleep(workerIndex * SELL_REQUEST_INTERVAL_MS);
-    while (!job.fatalError) {
-      if (job.stabilityMode && workerIndex > 0) return;
-      const itemIndex = nextIndex;
-      nextIndex += 1;
-      if (itemIndex >= lots.length) return;
-      const item = lots[itemIndex];
-      try {
-        const session = await getSession();
-        if (!session || session.steamId !== preview.steamId) {
-          throw new Error("Steam 登录已失效或账号已切换，任务已停止");
-        }
-        const result = await postListing(
-          session,
-          item,
-          item.sellerPrice,
-          waitForRequestSlot
-        );
-        job.transientRetries += Number(result.transientRetries || 0);
-        if (job.transientRetries >= 2 && !job.stabilityMode) {
-          job.stabilityMode = true;
-          job.concurrency = 1;
-        }
-        if (result.ok) {
-          job.succeeded += item.amount;
-          if (result.needsConfirmation) job.needsConfirmation += item.amount;
-        } else {
-          job.failed += item.amount;
-        }
-        job.results.push({
-          name: item.name,
-          amount: item.amount,
-          assetId: item.assetId,
-          ok: result.ok,
-          message: result.ok
-            ? (
-              result.needsConfirmation
-                ? "等待手机或邮箱确认"
-                : `已上架${result.transientRetries ? `（重试 ${result.transientRetries} 次）` : ""}`
-            )
-            : result.message
-        });
-        if (job.results.length > 100) job.results.shift();
-      } catch (error) {
-        job.failed += item.amount;
-        job.results.push({
-          name: item.name,
-          amount: item.amount,
-          assetId: item.assetId,
-          ok: false,
-          message: errorMessage(error)
-        });
-        if (/登录已失效|账号已切换/.test(errorMessage(error))) {
-          job.fatalError = errorMessage(error);
-        }
-      }
-      job.completed += item.amount;
-      job.updatedAt = Date.now();
-    }
+  function appendResult(record, ok, message) {
+    job.results.push({
+      name: record.item.name,
+      amount: record.item.amount,
+      assetId: record.item.assetId,
+      ok,
+      message
+    });
+    if (job.results.length > 100) job.results.shift();
   }
 
-  await Promise.all(
-    Array.from({ length: workerCount }, (_unused, index) => worker(index))
-  );
-  if (job.completed < job.total && job.fatalError) {
-    job.failed += job.total - job.completed;
+  function finishSuccess(record, result, verified = false) {
+    if (record.finalized) return;
+    record.finalized = true;
+    job.succeeded += record.item.amount;
+    job.completed += record.item.amount;
+    if (result.needsConfirmation) {
+      job.needsConfirmation += record.item.amount;
+    }
+    if (verified) job.verifiedSucceeded += record.item.amount;
+    const retryText = record.attempts > 1
+      ? `（重试 ${record.attempts - 1} 次）`
+      : "";
+    appendResult(
+      record,
+      true,
+      result.message || (
+        result.needsConfirmation
+          ? "等待手机或邮箱确认"
+          : `已上架${retryText}`
+      )
+    );
+    job.updatedAt = Date.now();
+  }
+
+  function finishFailure(record, message) {
+    if (record.finalized) return;
+    record.finalized = true;
+    job.failed += record.item.amount;
+    job.completed += record.item.amount;
+    appendResult(record, false, message);
+    job.updatedAt = Date.now();
+  }
+
+  async function attemptRecord(record) {
+    const currentSession = await getSession();
+    if (!currentSession || currentSession.steamId !== preview.steamId) {
+      const message = "Steam 登录已失效或账号已切换，任务已停止";
+      job.fatalError = message;
+      finishFailure(record, message);
+      return false;
+    }
+    if (record.attempts > 0) job.transientRetries += 1;
+    record.attempts += 1;
+    const result = await postListingAttempt(
+      currentSession,
+      record.item,
+      record.item.sellerPrice,
+      waitForRequestSlot
+    );
+    record.lastResult = result;
+    if (result.ok) {
+      finishSuccess(record, result);
+      return false;
+    }
+    if (result.fatal) {
+      job.fatalError = result.message;
+      finishFailure(record, result.message);
+      return false;
+    }
+    if (result.retryable) {
+      job.transientFailures += 1;
+      if (
+        (result.status === 429 || job.transientFailures >= 2)
+        && !job.stabilityMode
+      ) {
+        job.stabilityMode = true;
+        job.concurrency = 1;
+        job.statusText = "检测到 Steam 限流或临时故障，正在稳定处理剩余物品…";
+      }
+      if (result.requiresVerification || record.attempts < maximumAttempts) {
+        return true;
+      }
+    }
+    finishFailure(record, result.message);
+    return false;
+  }
+
+  async function runAttemptBatch(batch, concurrency, adaptive = false) {
+    const retryQueue = [];
+    let nextIndex = 0;
+
+    async function worker(workerIndex) {
+      if (workerIndex > 0) {
+        await sleep(workerIndex * SELL_REQUEST_INTERVAL_MS);
+      }
+      while (!job.fatalError) {
+        if (adaptive && job.stabilityMode && workerIndex > 0) return;
+        const recordIndex = nextIndex;
+        nextIndex += 1;
+        if (recordIndex >= batch.length) return;
+        const record = batch[recordIndex];
+        if (record.finalized) continue;
+        if (await attemptRecord(record)) retryQueue.push(record);
+      }
+    }
+
+    await Promise.all(
+      Array.from(
+        { length: Math.min(concurrency, batch.length) },
+        (_unused, index) => worker(index)
+      )
+    );
+    return retryQueue;
+  }
+
+  async function verifyUncertainResults(retryQueue) {
+    const uncertain = retryQueue.filter(
+      (record) => record.lastResult?.requiresVerification
+    );
+    if (!uncertain.length) return retryQueue;
+
+    job.phase = "verifying_failures";
+    job.statusText = `正在核验 ${uncertain.length} 件结果不确定的物品…`;
+    job.updatedAt = Date.now();
+    await sleep(SELL_VERIFY_SETTLE_MS);
+    const [listingResult, inventoryResult] = await Promise.allSettled([
+      fetchActiveMarketListingAssetKeys(),
+      fetchCurrentInventoryAssetKeys(
+        preview.steamId,
+        uncertain.map((record) => record.item)
+      )
+    ]);
+    const activeKeys = listingResult.status === "fulfilled"
+      ? listingResult.value
+      : null;
+    const inventory = inventoryResult.status === "fulfilled"
+      ? inventoryResult.value
+      : { keys: new Set(), verifiedContexts: new Set(), errors: [] };
+    const readyToRetry = retryQueue.filter(
+      (record) => !record.lastResult?.requiresVerification
+    );
+
+    for (const record of uncertain) {
+      const item = record.item;
+      const assetKey = marketAssetKey(item.appId, item.contextId, item.assetId);
+      const contextKey = inventoryContextKey(item.appId, item.contextId);
+      if (activeKeys?.has(assetKey)) {
+        finishSuccess(
+          record,
+          { message: "已在市场挂单（核验确认，未重复提交）" },
+          true
+        );
+      } else if (inventory.verifiedContexts.has(contextKey)) {
+        if (inventory.keys.has(assetKey)) {
+          readyToRetry.push(record);
+        } else {
+          finishSuccess(
+            record,
+            { message: "物品已离开库存（核验确认，未重复提交）" },
+            true
+          );
+        }
+      } else {
+        finishFailure(
+          record,
+          `上次请求结果无法确认，为避免重复上架未自动重试：`
+          + `${record.lastResult?.message || "未知错误"}`
+        );
+      }
+    }
+    return readyToRetry;
+  }
+
+  async function refreshRetryPrices(retryQueue) {
+    if (
+      !retryQueue.length
+      || (
+        job.pricingMode !== "market_highest_buy"
+        && job.pricingMode !== "market_lowest"
+      )
+    ) {
+      return retryQueue;
+    }
+
+    job.phase = "refreshing_retry_prices";
+    job.statusText = `正在刷新 ${retryQueue.length} 件待重试物品的市场价格…`;
+    job.updatedAt = Date.now();
+    const grouped = new Map();
+    for (const record of retryQueue) {
+      const key = marketListingKey(
+        record.item.appId,
+        record.item.marketHashName
+      );
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(record);
+    }
+    const entries = [...grouped.values()];
+    const ready = [];
+    const deadline = Date.now() + 15_000;
+    let nextIndex = 0;
+
+    async function priceWorker() {
+      while (true) {
+        const entryIndex = nextIndex;
+        nextIndex += 1;
+        if (entryIndex >= entries.length) return;
+        const matchingRecords = entries[entryIndex];
+        const sample = matchingRecords[0].item;
+        try {
+          if (job.pricingMode === "market_highest_buy") {
+            const price = await fetchHighestMarketBuyOrder(
+              sample.appId,
+              sample.marketHashName,
+              wallet,
+              deadline
+            );
+            let remainingDemand = price.quantity;
+            for (const record of matchingRecords) {
+              if (record.item.amount > remainingDemand) {
+                finishFailure(
+                  record,
+                  "当前最高求购数量不足，未继续重试"
+                );
+                continue;
+              }
+              const quote = calculateFees(
+                price.buyerPrice,
+                wallet,
+                record.item.publisherFee
+              );
+              if (quote.sellerReceives <= 0) {
+                finishFailure(record, "刷新后的最高求购价不足以支付市场手续费");
+                continue;
+              }
+              record.item.buyerPrice = quote.buyerPays;
+              record.item.sellerPrice = quote.sellerReceives;
+              remainingDemand -= record.item.amount;
+              ready.push(record);
+              job.marketPricesRefreshed += record.item.amount;
+            }
+          } else {
+            const price = await fetchLowestMarketBuyerPrice(
+              sample.appId,
+              sample.marketHashName,
+              currency.id,
+              deadline
+            );
+            for (const record of matchingRecords) {
+              const quote = calculateFees(
+                price.buyerPrice,
+                wallet,
+                record.item.publisherFee
+              );
+              if (quote.sellerReceives <= 0) {
+                finishFailure(record, "刷新后的市场最低价不足以支付市场手续费");
+                continue;
+              }
+              record.item.buyerPrice = quote.buyerPays;
+              record.item.sellerPrice = quote.sellerReceives;
+              ready.push(record);
+              job.marketPricesRefreshed += record.item.amount;
+            }
+          }
+        } catch (error) {
+          for (const record of matchingRecords) {
+            finishFailure(
+              record,
+              `重试前刷新市场价格失败：${errorMessage(error)}`
+            );
+          }
+        }
+      }
+    }
+
+    await Promise.all(
+      Array.from(
+        { length: Math.min(MARKET_PRICE_CONCURRENCY, entries.length) },
+        () => priceWorker()
+      )
+    );
+    job.buyerPaysFormatted = formatRange(
+      lots.map((item) => item.buyerPrice),
+      currency
+    );
+    job.sellerReceivesFormatted = formatRange(
+      lots.map((item) => item.sellerPrice),
+      currency
+    );
+    return ready;
+  }
+
+  let retryQueue = await runAttemptBatch(records, workerCount, true);
+  for (
+    let retryIndex = 0;
+    retryIndex < SELL_RETRY_DELAYS_MS.length && retryQueue.length;
+    retryIndex += 1
+  ) {
+    if (job.fatalError) break;
+    retryQueue = await verifyUncertainResults(retryQueue);
+    if (!retryQueue.length) break;
+    job.retryQueued = retryQueue.reduce(
+      (sum, record) => sum + record.item.amount,
+      0
+    );
+    job.retryRound = retryIndex + 1;
+    job.phase = "retry_wait";
+    const retryDelay = SELL_RETRY_DELAYS_MS[retryIndex];
+    job.statusText = (
+      `${job.retryQueued} 件物品等待第 ${job.retryRound} 轮稳定重试…`
+    );
+    job.updatedAt = Date.now();
+    await sleep(retryDelay);
+    if (job.fatalError) break;
+    retryQueue = await refreshRetryPrices(retryQueue);
+    if (!retryQueue.length) break;
+    job.phase = "retrying";
+    job.concurrency = 1;
+    job.stabilityMode = true;
+    job.statusText = (
+      `正在单线程执行第 ${job.retryRound} 轮重试…`
+    );
+    job.updatedAt = Date.now();
+    retryQueue = await runAttemptBatch(retryQueue, 1);
+  }
+
+  if (retryQueue.length && !job.fatalError) {
+    retryQueue = await verifyUncertainResults(retryQueue);
+  }
+
+  if (job.fatalError) {
+    for (const record of records) {
+      finishFailure(record, job.fatalError);
+    }
+  } else {
+    for (const record of records) {
+      if (!record.finalized) {
+        finishFailure(
+          record,
+          record.lastResult?.message || "达到最大重试次数"
+        );
+      }
+    }
+  }
+  job.retryQueued = 0;
+  job.concurrency = 0;
+  if (job.completed < job.total) {
+    const missing = job.total - job.completed;
+    job.failed += missing;
     job.completed = job.total;
   }
   job.state = "finished";
   job.phase = "finished";
-  job.statusText = "任务完成";
+  job.statusText = job.failed > 0 ? "任务完成，部分物品上架失败" : "任务完成";
   job.updatedAt = Date.now();
 }
 
@@ -1348,6 +1719,7 @@ async function createSellJob(body) {
     id: jobId,
     state: "queued",
     phase: "queued",
+    listingStarted: false,
     statusText: "任务已创建，等待后台校验…",
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -1356,6 +1728,12 @@ async function createSellJob(body) {
     succeeded: 0,
     failed: 0,
     needsConfirmation: 0,
+    transientRetries: 0,
+    transientFailures: 0,
+    retryQueued: 0,
+    retryRound: 0,
+    verifiedSucceeded: 0,
+    marketPricesRefreshed: 0,
     pricingMode: marketHighestBuyMode
       ? "market_highest_buy"
       : marketLowestMode
@@ -1369,7 +1747,7 @@ async function createSellJob(body) {
   jobs.set(jobId, job);
   previews.delete(preview.id);
   setImmediate(() => runSellJob(job, preview, lots).catch((error) => {
-    const failedDuringPreflight = job.phase !== "listing";
+    const failedDuringPreflight = !job.listingStarted;
     if (!failedDuringPreflight) {
       const remaining = Math.max(0, job.total - job.completed);
       job.failed += remaining;

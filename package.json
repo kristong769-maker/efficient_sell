@@ -1,6 +1,6 @@
 {
   "name": "steam-quick-sell",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "private": true,
   "description": "按物品名称批量预览并上架 Steam 库存物品的本地桌面工具",
   "main": "src/main.js",

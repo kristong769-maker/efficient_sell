@@ -86,6 +86,32 @@ function activeListingAssetKeys(payload) {
   return keys;
 }
 
+function classifySellFailure(status, message, options = {}) {
+  const numericStatus = Number(status || 0);
+  const text = String(message || "");
+  const fatal = numericStatus === 401
+    || numericStatus === 403
+    || /not logged in|login required|session (?:expired|invalid)|登录已失效|账号已切换/i
+      .test(text);
+  const retryable = !fatal && (
+    Boolean(options.transportError)
+    || numericStatus === 408
+    || numericStatus === 429
+    || numericStatus >= 500
+    || /try again|problem listing|temporar|too many|rate limit|server busy|稍后|频繁|重试|服务器繁忙/i
+      .test(text)
+  );
+  return {
+    fatal,
+    retryable,
+    requiresVerification: retryable && (
+      Boolean(options.transportError)
+      || numericStatus === 408
+      || numericStatus >= 500
+    )
+  };
+}
+
 function normalizeMarketPriceMode(value) {
   if (value === "lowest" || value === "highest_buy") return value;
   return null;
@@ -334,6 +360,7 @@ module.exports = {
   buyerPriceForDesiredReceive,
   capMatchesToHighestBuyDemand,
   calculateFees,
+  classifySellFailure,
   currencyMetadata,
   extractBalancedObject,
   extractMarketItemNameId,
