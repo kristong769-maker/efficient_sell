@@ -337,11 +337,14 @@ async function sell() {
 
 function renderJob(job) {
   const percent = job.total ? Math.round(job.completed / job.total * 100) : 0;
-  elements.progressText.textContent = job.state === "finished" ? "任务完成" : "正在逐件上架…";
+  elements.progressText.textContent = job.preflightFailed
+    ? "任务未开始"
+    : job.statusText || (job.state === "finished" ? "任务完成" : "正在逐件上架…");
   elements.progressNumbers.textContent = `${job.completed} / ${job.total}`;
   elements.progressBar.style.width = `${percent}%`;
-  elements.resultSummary.textContent =
-    `成功 ${job.succeeded} 件 · 失败 ${job.failed} 件 · 每件买家支付 ${job.buyerPaysFormatted} · 预计实收 ${job.sellerReceivesFormatted}`;
+  elements.resultSummary.textContent = job.preflightFailed
+    ? job.fatalError || "后台校验未通过，请重新扫描后再试。"
+    : `成功 ${job.succeeded} 件 · 失败 ${job.failed} 件 · 每件买家支付 ${job.buyerPaysFormatted} · 预计实收 ${job.sellerReceivesFormatted}`;
   elements.resultList.replaceChildren();
   for (const result of job.results.slice().reverse()) {
     const line = document.createElement("div");
@@ -358,7 +361,9 @@ function renderJob(job) {
     elements.resultSummary.textContent +=
       ` · 有 ${job.needsConfirmation} 件需要在 Steam 手机令牌或邮箱中确认`;
   }
-  if (job.fatalError) elements.resultSummary.textContent += ` · ${job.fatalError}`;
+  if (job.fatalError && !job.preflightFailed) {
+    elements.resultSummary.textContent += ` · ${job.fatalError}`;
+  }
 }
 
 async function refreshInventoryAfterJob(job) {
@@ -391,6 +396,13 @@ async function monitorJob(jobId) {
     const job = await api(`/api/jobs/${jobId}`);
     renderJob(job);
     if (job.state === "finished") {
+      if (job.preflightFailed) {
+        setScanBusy(false);
+        elements.sellButton.textContent = "一键出售";
+        elements.sellButton.disabled = true;
+        toast(`任务未开始：${job.fatalError || "请重新扫描后再试"}`, 8000);
+        return;
+      }
       await refreshInventoryAfterJob(job);
       return;
     }

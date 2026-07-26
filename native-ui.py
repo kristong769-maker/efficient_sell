@@ -30,7 +30,7 @@ from update_support import (
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / ".data"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 BG = "#f3f6fa"
 PANEL = "#ffffff"
 PANEL_2 = "#f7f9fc"
@@ -1672,6 +1672,15 @@ class SteamQuickSellApp:
             self.render_job(job)
             if job.get("state") == "finished":
                 self.job_polling = False
+                if job.get("preflightFailed"):
+                    self.sale_in_progress = False
+                    self.reset_scan_buttons()
+                    self.sell_button.configure(text="确认并一键出售", state="disabled")
+                    messagebox.showwarning(
+                        "任务未开始",
+                        job.get("fatalError") or "后台校验未通过，请重新扫描后再试。",
+                    )
+                    return
                 message = (
                     "任务完成。"
                     if not int(job.get("failed", 0))
@@ -1761,30 +1770,39 @@ class SteamQuickSellApp:
         total = max(1, int(job.get("total", 0)))
         completed = int(job.get("completed", 0))
         self.progress_bar.configure(maximum=total, value=completed)
-        self.progress_text.configure(
-            text=(
-                "任务完成"
-                if job.get("state") == "finished"
-                else (
-                    f"检测到 Steam 限流，已切换单线程稳定模式…  "
-                    f"{completed} / {total}"
-                )
-                if job.get("stabilityMode")
-                else (
-                    f"正在 {job.get('concurrency', 1)} 路并发上架…  "
-                    f"{completed} / {total}"
-                )
+        state = job.get("state")
+        if job.get("preflightFailed"):
+            progress_text = "任务未开始"
+        elif state == "finished":
+            progress_text = job.get("statusText") or "任务完成"
+        elif state in ("queued", "preparing"):
+            progress_text = job.get("statusText") or "正在进行后台校验…"
+        elif job.get("stabilityMode"):
+            progress_text = (
+                f"检测到 Steam 限流，已切换单线程稳定模式…  "
+                f"{completed} / {total}"
             )
+        else:
+            progress_text = (
+                f"正在 {job.get('concurrency', 1)} 路并发上架…  "
+                f"{completed} / {total}"
+            )
+        self.progress_text.configure(
+            text=progress_text
         )
-        self.result_summary.configure(
-            text=(
+        if job.get("preflightFailed"):
+            summary = job.get("fatalError") or "后台校验未通过，请重新扫描后再试。"
+        else:
+            summary = (
                 f"成功 {job.get('succeeded', 0)} 件 · "
                 f"失败 {job.get('failed', 0)} 件 · "
                 f"临时重试 {job.get('transientRetries', 0)} 次 · "
                 f"每件买家支付 {job.get('buyerPaysFormatted', '')} · "
                 f"预计实收 {job.get('sellerReceivesFormatted', '')}"
             )
-        )
+            if job.get("fatalError"):
+                summary += f" · {job.get('fatalError')}"
+        self.result_summary.configure(text=summary)
         self.result_list.delete(0, "end")
         for result in reversed(job.get("results", [])):
             amount = int(result.get("amount", 1))

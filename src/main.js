@@ -60,6 +60,7 @@ const HIGHEST_BUY_BATCH_TIMEOUT_MS = Number.isFinite(configuredHighestBuyTimeout
   : 30_000;
 const ACTIVE_LISTING_PAGE_SIZE = 100;
 const MAX_ACTIVE_LISTING_PAGES = 50;
+const ACTIVE_LISTING_TOTAL_TIMEOUT_MS = 10_000;
 const NATIVE_MODE = process.env.STEAM_QUICK_SELL_NATIVE === "1";
 const STEAM_CLIENT_MODE = process.env.STEAM_QUICK_SELL_STEAM_CLIENT === "1";
 const STEAM_CDP_PORT = Number(process.env.STEAM_CDP_PORT || 8080);
@@ -210,8 +211,13 @@ async function getText(url, options = {}) {
 
 async function fetchActiveMarketListingAssetKeys() {
   const keys = new Set();
+  const deadline = Date.now() + ACTIVE_LISTING_TOTAL_TIMEOUT_MS;
   let start = 0;
   for (let pageIndex = 0; pageIndex < MAX_ACTIVE_LISTING_PAGES; pageIndex += 1) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error("当前市场挂单校验超时，请稍后重试");
+    }
     const listingsUrl = new URL("https://steamcommunity.com/market/mylistings");
     listingsUrl.search = new URLSearchParams({
       start: String(start),
@@ -219,7 +225,9 @@ async function fetchActiveMarketListingAssetKeys() {
     });
     let payload;
     try {
-      payload = JSON.parse(await getText(listingsUrl.href, { timeoutMs: 12_000 }));
+      payload = JSON.parse(await getText(listingsUrl.href, {
+        timeoutMs: Math.max(1, Math.min(7000, remainingMs))
+      }));
     } catch (error) {
       throw new Error(`无法读取当前市场挂单：${errorMessage(error)}`);
     }
@@ -1123,7 +1131,57 @@ async function postListing(session, item, sellerPrice, beforeAttempt) {
 }
 
 async function runSellJob(job, preview, lots) {
+  job.state = "preparing";
+  job.phase = "validating_session";
+  job.statusText = "正在校验 Steam 登录状态…";
+  job.updatedAt = Date.now();
+  const session = await getSession();
+  if (!session || session.steamId !== preview.steamId) {
+    throw new Error("Steam 登录已失效或账号已切换，任务未开始");
+  }
+
+  job.phase = "validating_listings";
+  job.statusText = "正在检查当前市场挂单…";
+  job.updatedAt = Date.now();
+  const activeListingKeys = await fetchActiveMarketListingAssetKeys();
+  const alreadyListedCount = lots.reduce(
+    (sum, lot) => (
+      activeListingKeys.has(marketAssetKey(lot.appId, lot.contextId, lot.assetId))
+        ? sum + lot.amount
+        : sum
+    ),
+    0
+  );
+  if (alreadyListedCount > 0) {
+    throw new Error(
+      `所选物品中有 ${alreadyListedCount} 件已在 Steam 市场挂单，`
+      + "请重新扫描库存后再出售"
+    );
+  }
+
+  const maximumPriceAge = job.immediateMatchMode
+    ? 30_000
+    : job.pricingMode === "market_lowest"
+      ? 60_000
+      : null;
+  if (
+    maximumPriceAge
+    && (
+      !preview.marketPriceTime
+      || Date.now() - preview.marketPriceTime > maximumPriceAge
+    )
+  ) {
+    throw new Error(
+      job.immediateMatchMode
+        ? "挂单校验完成时最高求购价已超过 30 秒，请重新扫描物品价格"
+        : "挂单校验完成时市场最低价已超过 60 秒，请重新扫描物品价格"
+    );
+  }
+
   job.state = "running";
+  job.phase = "listing";
+  job.statusText = "正在提交 Steam 市场出售请求…";
+  job.updatedAt = Date.now();
   const workerCount = Math.min(SELL_CONCURRENCY, lots.length);
   job.initialConcurrency = workerCount;
   job.concurrency = workerCount;
@@ -1210,12 +1268,18 @@ async function runSellJob(job, preview, lots) {
     job.completed = job.total;
   }
   job.state = "finished";
+  job.phase = "finished";
+  job.statusText = "任务完成";
   job.updatedAt = Date.now();
 }
 
 async function createSellJob(body) {
   const activeJob = [...jobs.values()].find(
-    (job) => job.state === "queued" || job.state === "running"
+    (job) => (
+      job.state === "queued"
+      || job.state === "preparing"
+      || job.state === "running"
+    )
   );
   if (activeJob) throw new Error("已有上架任务正在运行，请等待它完成");
   const preview = previews.get(String(body.previewId || ""));
@@ -1225,15 +1289,6 @@ async function createSellJob(body) {
   if (body.confirmToken !== preview.confirmToken) {
     throw new Error("出售确认无效，请重新扫描");
   }
-  const session = await getSession();
-  if (!session || session.steamId !== preview.steamId) {
-    throw new Error("Steam 登录已失效或账号已切换");
-  }
-  // Reuse the immutable wallet snapshot from preview. The only fresh market
-  // read before submission is the active-listing safety check below.
-  const wallet = preview.wallet || walletCache?.value || await getWalletInfo();
-  const currency = currencyMetadata(wallet);
-  const activeListingKeys = await fetchActiveMarketListingAssetKeys();
   const marketLowestMode = body.priceMode === "market_lowest";
   const marketHighestBuyMode = body.priceMode === "market_highest_buy";
   const automaticMarketMode = marketLowestMode || marketHighestBuyMode;
@@ -1257,26 +1312,16 @@ async function createSellJob(body) {
       );
     }
   }
+  const wallet = preview.wallet || walletCache?.value;
+  if (!wallet) {
+    throw new Error("钱包信息已失效，请重新扫描后再出售");
+  }
+  const currency = currencyMetadata(wallet);
   const inputMinor = automaticMarketMode
     ? null
     : parseDisplayPrice(body.price, currency);
   const lots = lotsFromPreview(preview, body.quantity || "all");
   if (!lots.length) throw new Error("没有可出售的匹配物品");
-  const alreadyListedCount = lots.reduce(
-    (sum, lot) => (
-      activeListingKeys.has(marketAssetKey(lot.appId, lot.contextId, lot.assetId))
-        ? sum + lot.amount
-        : sum
-    ),
-    0
-  );
-  if (alreadyListedCount > 0) {
-    previews.delete(preview.id);
-    throw new Error(
-      `所选物品中有 ${alreadyListedCount} 件已在 Steam 市场挂单，`
-      + "请重新扫描库存后再出售"
-    );
-  }
   for (const lot of lots) {
     const fees = marketHighestBuyMode
       ? {
@@ -1302,6 +1347,8 @@ async function createSellJob(body) {
   const job = {
     id: jobId,
     state: "queued",
+    phase: "queued",
+    statusText: "任务已创建，等待后台校验…",
     createdAt: Date.now(),
     updatedAt: Date.now(),
     total,
@@ -1322,8 +1369,17 @@ async function createSellJob(body) {
   jobs.set(jobId, job);
   previews.delete(preview.id);
   setImmediate(() => runSellJob(job, preview, lots).catch((error) => {
+    const failedDuringPreflight = job.phase !== "listing";
+    if (!failedDuringPreflight) {
+      const remaining = Math.max(0, job.total - job.completed);
+      job.failed += remaining;
+      job.completed = job.total;
+    }
     job.state = "finished";
+    job.phase = "finished";
+    job.preflightFailed = failedDuringPreflight;
     job.fatalError = errorMessage(error);
+    job.statusText = failedDuringPreflight ? "任务未开始" : "任务异常结束";
     job.updatedAt = Date.now();
   }));
   return job;
