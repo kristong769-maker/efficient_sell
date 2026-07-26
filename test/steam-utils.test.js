@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  activeListingAssetKeys,
   buyerPriceForDesiredReceive,
   capMatchesToHighestBuyDemand,
   calculateFees,
@@ -13,6 +14,7 @@ const {
   itemMatches,
   isMarketKey,
   isWeaponCase,
+  marketAssetKey,
   marketListingKey,
   marketListingUrl,
   normalizeInventoryCategory,
@@ -113,6 +115,32 @@ test("识别带类型标签或标准名称的可售钥匙", () => {
   assert.equal(
     isMarketKey({ market_hash_name: "Fever Case", tags: [] }),
     false
+  );
+});
+
+test("从我的市场挂单资产中提取唯一库存键", () => {
+  const keys = activeListingAssetKeys({
+    assets: {
+      753: {
+        6: {
+          ignoredMapKey: { id: "123", name: "卡牌 A" },
+          456: { assetid: "456", name: "卡牌 B" }
+        }
+      },
+      730: {
+        2: {
+          789: { name: "武器箱" }
+        }
+      }
+    }
+  });
+  assert.deepEqual(
+    [...keys].sort(),
+    [
+      marketAssetKey(730, 2, 789),
+      marketAssetKey(753, 6, 123),
+      marketAssetKey(753, 6, 456)
+    ].sort()
   );
 });
 

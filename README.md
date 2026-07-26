@@ -1,6 +1,7 @@
-# Steam 库存一键出售 v1.2.0
+# Steam 库存一键出售 v1.2.1
 
-> `v1.2.0` 正式版新增统一出售工作台、五类商品筛选与任务完成后的实时库存更新。
+> `v1.2.1` 在提交前校验 Steam 市场挂单，并为最高求购价批量读取增加总超时，
+> 避免陈旧预览重复提交或长时间停在读取状态。
 
 这是一个仅在本机运行的 Windows 原生桌面工具。它直接复用正在运行的桌面 Steam
 客户端登录状态，不提供也不需要独立登录功能。工具会扫描 Steam 库存，并以
@@ -88,12 +89,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.
 
 ```powershell
 git add .
-git commit -m "release: v1.2.0"
-git tag -a v1.2.0 -m "Steam 库存一键出售 v1.2.0"
+git commit -m "release: v1.2.1"
+git tag -a v1.2.1 -m "Steam 库存一键出售 v1.2.1"
 git push origin master
-git push origin v1.2.0
+git push origin v1.2.1
 ```
 
 `.github/workflows/release.yml` 会在标签推送后自动运行测试，生成
-`efficent_sell-v1.2.0.zip` 和对应的 `.sha256`，并创建 GitHub Release。程序只把
+`efficent_sell-v1.2.1.zip` 和对应的 `.sha256`，并创建 GitHub Release。程序只把
 包含可校验更新包的正式 Release 识别为可一键安装版本。

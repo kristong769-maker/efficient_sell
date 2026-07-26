@@ -30,7 +30,7 @@ from update_support import (
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / ".data"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 BG = "#f3f6fa"
 PANEL = "#ffffff"
 PANEL_2 = "#f7f9fc"

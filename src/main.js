@@ -6,6 +6,7 @@ const http = require("node:http");
 const path = require("node:path");
 const { chromium } = require("playwright-core");
 const {
+  activeListingAssetKeys,
   buyerPriceForDesiredReceive,
   capMatchesToHighestBuyDemand,
   calculateFees,
@@ -17,6 +18,7 @@ const {
   itemMatches,
   isMarketKey,
   isWeaponCase,
+  marketAssetKey,
   marketListingKey,
   marketListingUrl,
   normalizeInventoryCategory,
@@ -50,6 +52,14 @@ const SCAN_CONCURRENCY = Math.min(
   Math.max(1, Number(process.env.STEAM_SCAN_CONCURRENCY || 4))
 );
 const MARKET_PRICE_CONCURRENCY = 3;
+const configuredHighestBuyTimeoutMs = Number(
+  process.env.STEAM_HIGHEST_BUY_SCAN_TIMEOUT_MS || 30_000
+);
+const HIGHEST_BUY_BATCH_TIMEOUT_MS = Number.isFinite(configuredHighestBuyTimeoutMs)
+  ? Math.max(15_000, configuredHighestBuyTimeoutMs)
+  : 30_000;
+const ACTIVE_LISTING_PAGE_SIZE = 100;
+const MAX_ACTIVE_LISTING_PAGES = 50;
 const NATIVE_MODE = process.env.STEAM_QUICK_SELL_NATIVE === "1";
 const STEAM_CLIENT_MODE = process.env.STEAM_QUICK_SELL_STEAM_CLIENT === "1";
 const STEAM_CDP_PORT = Number(process.env.STEAM_CDP_PORT || 8080);
@@ -176,22 +186,61 @@ async function getSession() {
 
 async function getText(url, options = {}) {
   if (STEAM_CLIENT_MODE) {
-    const result = await steamClientFetch(url, { method: "GET" });
+    const result = await steamClientFetch(url, {
+      method: "GET",
+      timeoutMs: Number(options.timeoutMs || 15_000)
+    });
     if (!result.ok) {
       throw new Error(`Steam 返回 HTTP ${result.status}，请稍后重试`);
     }
     return result.text;
   }
+  const { timeoutMs, ...requestOptions } = options;
   const response = await browserContext.request.get(url, {
-    timeout: 30_000,
+    timeout: Number(timeoutMs || 30_000),
     failOnStatusCode: false,
-    ...options
+    ...requestOptions
   });
   const text = await response.text();
   if (!response.ok()) {
     throw new Error(`Steam 返回 HTTP ${response.status()}，请稍后重试`);
   }
   return text;
+}
+
+async function fetchActiveMarketListingAssetKeys() {
+  const keys = new Set();
+  let start = 0;
+  for (let pageIndex = 0; pageIndex < MAX_ACTIVE_LISTING_PAGES; pageIndex += 1) {
+    const listingsUrl = new URL("https://steamcommunity.com/market/mylistings");
+    listingsUrl.search = new URLSearchParams({
+      start: String(start),
+      count: String(ACTIVE_LISTING_PAGE_SIZE)
+    });
+    let payload;
+    try {
+      payload = JSON.parse(await getText(listingsUrl.href, { timeoutMs: 12_000 }));
+    } catch (error) {
+      throw new Error(`无法读取当前市场挂单：${errorMessage(error)}`);
+    }
+    if (payload?.success !== true && Number(payload?.success) !== 1) {
+      throw new Error("无法读取当前市场挂单，请稍后重试");
+    }
+    for (const key of activeListingAssetKeys(payload)) keys.add(key);
+    const totalCount = Math.max(0, Math.trunc(Number(payload.total_count || 0)));
+    const pageSize = Math.max(
+      1,
+      Math.trunc(Number(payload.pagesize || ACTIVE_LISTING_PAGE_SIZE))
+    );
+    const currentStart = Math.max(0, Math.trunc(Number(payload.start ?? start)));
+    if (currentStart + pageSize >= totalCount) return keys;
+    const nextStart = currentStart + pageSize;
+    if (nextStart <= start) {
+      throw new Error("Steam 市场挂单分页数据无效");
+    }
+    start = nextStart;
+  }
+  throw new Error("当前市场挂单数量过多，无法完成安全扫描");
 }
 
 async function getWalletInfo(force = false) {
@@ -631,16 +680,28 @@ async function populateLowestMarketPrices(items, wallet) {
   return errors;
 }
 
-async function fetchHighestMarketBuyOrder(appId, marketHashName, wallet) {
+async function fetchHighestMarketBuyOrder(
+  appId,
+  marketHashName,
+  wallet,
+  deadline = Number.POSITIVE_INFINITY
+) {
   let lastError;
   const cacheKey = marketListingKey(appId, marketHashName);
   let cachedItemNameId = marketItemNameIdCache.get(cacheKey) || null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error("最高求购价读取超时");
+    }
+    const requestTimeoutMs = Math.max(1000, Math.min(15_000, remainingMs));
     try {
       if (!cachedItemNameId) {
         const listingUrl = new URL(marketListingUrl(appId, marketHashName));
         listingUrl.searchParams.set("l", "english");
-        const listingHtml = await getText(listingUrl.href);
+        const listingHtml = await getText(listingUrl.href, {
+          timeoutMs: requestTimeoutMs
+        });
         const renderedOrder = highestBuyOrderFromListingHtml(
           listingHtml,
           currencyMetadata(wallet)
@@ -663,7 +724,9 @@ async function fetchHighestMarketBuyOrder(appId, marketHashName, wallet) {
         item_nameid: cachedItemNameId,
         two_factor: "0"
       });
-      const histogram = JSON.parse(await getText(histogramUrl.href));
+      const histogram = JSON.parse(await getText(histogramUrl.href, {
+        timeoutMs: Math.max(1000, Math.min(15_000, deadline - Date.now()))
+      }));
       const order = highestBuyOrderFromHistogram(histogram);
       if (!order) throw new Error("当前没有有效的市场求购单");
       return { itemNameId: cachedItemNameId, ...order };
@@ -673,7 +736,12 @@ async function fetchHighestMarketBuyOrder(appId, marketHashName, wallet) {
     if (!/429|请求超时|HTTP 5\d\d|closed|destroyed|Target/i.test(lastError.message)) {
       break;
     }
-    await sleep(1800 * (attempt + 1));
+    const retryWaitMs = Math.min(
+      1800 * (attempt + 1),
+      Math.max(0, deadline - Date.now())
+    );
+    if (retryWaitMs <= 0) break;
+    await sleep(retryWaitMs);
   }
   throw lastError || new Error("无法读取市场最高求购价");
 }
@@ -694,11 +762,18 @@ async function populateHighestMarketBuyOrders(items, wallet) {
   }
   const entries = [...uniqueItems.values()];
   const errors = [];
+  const deadline = Date.now() + HIGHEST_BUY_BATCH_TIMEOUT_MS;
   let nextIndex = 0;
+  let processedEntries = 0;
+  let timedOut = false;
 
   async function priceWorker(workerIndex) {
     if (workerIndex > 0) await sleep(workerIndex * 250);
     while (true) {
+      if (Date.now() >= deadline) {
+        timedOut = true;
+        return;
+      }
       const index = nextIndex;
       nextIndex += 1;
       if (index >= entries.length) return;
@@ -707,7 +782,8 @@ async function populateHighestMarketBuyOrders(items, wallet) {
         const result = await fetchHighestMarketBuyOrder(
           appId,
           marketHashName,
-          wallet
+          wallet,
+          deadline
         );
         for (const item of matchingItems) {
           const quote = calculateFees(
@@ -723,6 +799,8 @@ async function populateHighestMarketBuyOrders(items, wallet) {
         }
       } catch (error) {
         errors.push(`${matchingItems[0]?.name || marketHashName}: ${errorMessage(error)}`);
+      } finally {
+        processedEntries += 1;
       }
     }
   }
@@ -733,6 +811,12 @@ async function populateHighestMarketBuyOrders(items, wallet) {
       (_unused, index) => priceWorker(index)
     )
   );
+  if (timedOut && processedEntries < entries.length) {
+    errors.push(
+      `最高求购价读取超过 ${Math.round(HIGHEST_BUY_BATCH_TIMEOUT_MS / 1000)} 秒，`
+      + `已跳过剩余 ${entries.length - processedEntries} 种商品`
+    );
+  }
   return errors;
 }
 
@@ -1145,10 +1229,11 @@ async function createSellJob(body) {
   if (!session || session.steamId !== preview.steamId) {
     throw new Error("Steam 登录已失效或账号已切换");
   }
-  // A preview is created only after the wallet has been detected. Reuse that
-  // immutable snapshot so clicking Sell never waits on another market-page GET.
+  // Reuse the immutable wallet snapshot from preview. The only fresh market
+  // read before submission is the active-listing safety check below.
   const wallet = preview.wallet || walletCache?.value || await getWalletInfo();
   const currency = currencyMetadata(wallet);
+  const activeListingKeys = await fetchActiveMarketListingAssetKeys();
   const marketLowestMode = body.priceMode === "market_lowest";
   const marketHighestBuyMode = body.priceMode === "market_highest_buy";
   const automaticMarketMode = marketLowestMode || marketHighestBuyMode;
@@ -1177,6 +1262,21 @@ async function createSellJob(body) {
     : parseDisplayPrice(body.price, currency);
   const lots = lotsFromPreview(preview, body.quantity || "all");
   if (!lots.length) throw new Error("没有可出售的匹配物品");
+  const alreadyListedCount = lots.reduce(
+    (sum, lot) => (
+      activeListingKeys.has(marketAssetKey(lot.appId, lot.contextId, lot.assetId))
+        ? sum + lot.amount
+        : sum
+    ),
+    0
+  );
+  if (alreadyListedCount > 0) {
+    previews.delete(preview.id);
+    throw new Error(
+      `所选物品中有 ${alreadyListedCount} 件已在 Steam 市场挂单，`
+      + "请重新扫描库存后再出售"
+    );
+  }
   for (const lot of lots) {
     const fees = marketHighestBuyMode
       ? {

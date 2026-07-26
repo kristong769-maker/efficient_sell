@@ -69,6 +69,23 @@ function normalizeInventoryCategory(value) {
     : null;
 }
 
+function marketAssetKey(appId, contextId, assetId) {
+  return `${String(appId)}|${String(contextId)}|${String(assetId)}`;
+}
+
+function activeListingAssetKeys(payload) {
+  const keys = new Set();
+  for (const [appId, contexts] of Object.entries(payload?.assets || {})) {
+    for (const [contextId, assets] of Object.entries(contexts || {})) {
+      for (const [assetIdKey, asset] of Object.entries(assets || {})) {
+        const assetId = asset?.id || asset?.assetid || assetIdKey;
+        if (assetId) keys.add(marketAssetKey(appId, contextId, assetId));
+      }
+    }
+  }
+  return keys;
+}
+
 function normalizeMarketPriceMode(value) {
   if (value === "lowest" || value === "highest_buy") return value;
   return null;
@@ -313,6 +330,7 @@ function sleep(milliseconds) {
 }
 
 module.exports = {
+  activeListingAssetKeys,
   buyerPriceForDesiredReceive,
   capMatchesToHighestBuyDemand,
   calculateFees,
@@ -325,6 +343,7 @@ module.exports = {
   itemMatches,
   isMarketKey,
   isWeaponCase,
+  marketAssetKey,
   marketListingKey,
   marketListingUrl,
   normalizeName,
