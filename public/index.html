@@ -30,22 +30,54 @@
 
     <section id="workspace" class="workspace hidden">
       <section class="card form-card">
-        <div class="step-label"><span>1</span> 查找物品</div>
-        <label for="itemName">物品名称</label>
-        <div class="search-row">
-          <input id="itemName" type="text" maxlength="160"
-                 placeholder="例如：Fever Case / 狂牙大行动武器箱" autocomplete="off">
-          <button id="scanButton" class="primary" type="button">扫描库存</button>
+        <div class="step-label"><span>1</span> 选择商品与出售方式</div>
+        <div class="filter-grid">
+          <div>
+            <label for="category">商品种类</label>
+            <select id="category">
+              <option value="all">全部可售商品</option>
+              <option value="weapon_case">武器箱</option>
+              <option value="key">钥匙</option>
+              <option value="trading_card">集换式卡牌</option>
+              <option value="specific">特定商品</option>
+            </select>
+          </div>
+          <div>
+            <label for="itemName">搜索商品</label>
+            <input id="itemName" type="text" maxlength="160"
+                   placeholder="输入名称或关键词" autocomplete="off" disabled>
+          </div>
+          <div>
+            <label for="matchMode">匹配方式</label>
+            <select id="matchMode" disabled>
+              <option value="contains">包含关键词</option>
+              <option value="exact">精确匹配</option>
+            </select>
+          </div>
         </div>
-        <div class="radio-row">
-          <label><input type="radio" name="matchMode" value="exact" checked> 精确匹配</label>
-          <label><input type="radio" name="matchMode" value="contains"> 包含关键词</label>
+        <p id="categoryHint" class="hint">扫描库存中的全部可售商品；此分类无需搜索。</p>
+        <div class="sale-mode-grid">
+          <div class="sale-mode-card">
+            <strong>上架出售</strong>
+            <span>自定义价格，或跟随当前市场最低价创建挂单</span>
+            <div class="sale-actions">
+              <button id="scanButton" class="primary" type="button">扫描后自定义价格</button>
+              <button id="lowestButton" class="market-lowest" type="button">以市场底价上架</button>
+            </div>
+          </div>
+          <div class="sale-mode-card instant">
+            <strong>即时出售</strong>
+            <span>按当前最高求购价优先成交</span>
+            <button id="highestButton" class="market-highest" type="button">以最高求购价出售</button>
+          </div>
         </div>
-        <p class="hint">会扫描所有游戏库存，仅显示可在社区市场出售的匹配物品。</p>
       </section>
 
       <section id="previewPanel" class="card preview-card hidden">
-        <div class="step-label"><span>2</span> 核对与定价</div>
+        <div class="preview-heading">
+          <div class="step-label"><span>2</span> 核对与定价</div>
+          <span id="liveInventory" class="live-inventory">库存快照</span>
+        </div>
         <div class="summary-grid">
           <div><strong id="matchCount">0</strong><span>匹配数量</span></div>
           <div><strong id="contextCount">0</strong><span>已扫描库存</span></div>

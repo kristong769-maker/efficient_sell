@@ -11,9 +11,11 @@ const {
   highestBuyOrderFromListingHtml,
   highestBuyOrderFromHistogram,
   itemMatches,
+  isMarketKey,
   isWeaponCase,
   marketListingKey,
   marketListingUrl,
+  normalizeInventoryCategory,
   normalizeMarketPriceMode,
   parseDisplayPrice,
   parseEmbeddedJson,
@@ -88,7 +90,36 @@ test("只识别 CS2 武器箱并排除其他容器", () => {
   );
 });
 
+test("识别带类型标签或标准名称的可售钥匙", () => {
+  assert.equal(
+    isMarketKey({
+      market_hash_name: "CS20 Case Key",
+      tags: [{ internal_name: "CSGO_Tool_WeaponCase_KeyTag" }]
+    }),
+    true
+  );
+  assert.equal(
+    isMarketKey({ market_hash_name: "Mann Co. Supply Crate Key", tags: [] }),
+    true
+  );
+  assert.equal(
+    isMarketKey({ name: "武器箱钥匙", tags: [] }),
+    true
+  );
+  assert.equal(
+    isMarketKey({ market_hash_name: "Keychain | Lil' Monster", tags: [] }),
+    false
+  );
+  assert.equal(
+    isMarketKey({ market_hash_name: "Fever Case", tags: [] }),
+    false
+  );
+});
+
 test("普通物品市场定价模式和跨游戏市场键", () => {
+  assert.equal(normalizeInventoryCategory("all"), "all");
+  assert.equal(normalizeInventoryCategory("weapon_case"), "weapon_case");
+  assert.equal(normalizeInventoryCategory("unknown"), null);
   assert.equal(normalizeMarketPriceMode("lowest"), "lowest");
   assert.equal(normalizeMarketPriceMode("highest_buy"), "highest_buy");
   assert.equal(normalizeMarketPriceMode("custom"), null);

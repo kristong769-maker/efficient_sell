@@ -15,9 +15,11 @@ const {
   highestBuyOrderFromListingHtml,
   highestBuyOrderFromHistogram,
   itemMatches,
+  isMarketKey,
   isWeaponCase,
   marketListingKey,
   marketListingUrl,
+  normalizeInventoryCategory,
   normalizeMarketPriceMode,
   parseDisplayPrice,
   parseEmbeddedJson,
@@ -361,9 +363,10 @@ function isTradingCard(description, asset, context) {
 async function scanMatches(steamId, query, mode, options = {}) {
   const contexts = await discoverContexts(steamId);
   if (!contexts.length) throw new Error("当前账号没有可读取的 Steam 库存");
-  const targetContexts = options.tradingCardsOnly
+  const category = normalizeInventoryCategory(options.category) || "specific";
+  const targetContexts = category === "trading_card"
     ? contexts.filter((context) => context.appId === "753" && context.contextId === "6")
-    : options.weaponCasesOnly
+    : category === "weapon_case"
       ? contexts.filter((context) => context.appId === "730" && context.contextId === "2")
       : contexts;
   if (!targetContexts.length) {
@@ -399,11 +402,19 @@ async function scanMatches(steamId, query, mode, options = {}) {
               asset.appid || context.appId,
               asset.contextid || context.contextId
             );
-            if (options.tradingCardsOnly) {
-              if (!tradingCard) continue;
-            } else if (options.weaponCasesOnly) {
-              if (!weaponCase) continue;
-            } else if (!itemMatches(description, query, mode)) {
+            const marketKey = isMarketKey(description);
+            const categoryMatches = category === "all"
+              || (category === "trading_card" && tradingCard)
+              || (category === "weapon_case" && weaponCase)
+              || (category === "key" && marketKey)
+              || (category === "specific" && itemMatches(description, query, mode));
+            if (!categoryMatches) continue;
+            if (
+              category !== "all"
+              && category !== "specific"
+              && query
+              && !itemMatches(description, query, mode)
+            ) {
               continue;
             }
             matches.push({
@@ -416,6 +427,7 @@ async function scanMatches(steamId, query, mode, options = {}) {
               marketHashName: description.market_hash_name || description.market_name || description.name,
               isTradingCard: tradingCard,
               isWeaponCase: weaponCase,
+              isMarketKey: marketKey,
               publisherFee: Number.isFinite(Number(description.market_fee))
                 ? Number(description.market_fee)
                 : null,
@@ -454,6 +466,7 @@ function groupMatches(matches) {
       iconUrl: item.iconUrl,
       isTradingCard: item.isTradingCard,
       isWeaponCase: item.isWeaponCase,
+      isMarketKey: item.isMarketKey,
       lowestPriceFormatted: item.lowestPriceFormatted || null,
       highestBuyOrderFormatted: item.highestBuyOrderFormatted || null,
       highestBuyOrderQuantity: item.highestBuyOrderQuantity || 0,
@@ -726,50 +739,64 @@ async function populateHighestMarketBuyOrders(items, wallet) {
 async function createPreview(body) {
   const session = await getSession();
   if (!session) throw new Error("Steam 登录已失效，请重新登录");
-  const tradingCardsOnly = body.tradingCardsOnly === true;
-  const weaponCasesOnly = body.weaponCasesOnly === true;
-  if (tradingCardsOnly && weaponCasesOnly) {
+  const legacyTradingCardsOnly = body.tradingCardsOnly === true;
+  const legacyWeaponCasesOnly = body.weaponCasesOnly === true;
+  if (legacyTradingCardsOnly && legacyWeaponCasesOnly) {
     throw new Error("库存分类条件无效");
   }
-  const cardPriceMode = tradingCardsOnly
-    ? normalizeMarketPriceMode(body.cardPriceMode) || "lowest"
-    : null;
-  const casePriceMode = weaponCasesOnly
-    ? normalizeMarketPriceMode(body.casePriceMode) || "lowest"
-    : null;
-  const itemPriceMode = tradingCardsOnly || weaponCasesOnly
-    ? null
-    : normalizeMarketPriceMode(body.itemPriceMode);
-  const marketPriceMode = cardPriceMode || casePriceMode || itemPriceMode;
-  const query = tradingCardsOnly
-    ? "全部集换式卡牌"
-    : weaponCasesOnly
-      ? "全部武器箱"
-      : String(body.name || "").trim();
-  if (!tradingCardsOnly && !weaponCasesOnly && (!query || query.length > 160)) {
+  const category = legacyTradingCardsOnly
+    ? "trading_card"
+    : legacyWeaponCasesOnly
+      ? "weapon_case"
+      : normalizeInventoryCategory(body.category) || "specific";
+  const categoryNames = {
+    all: "全部可售商品",
+    weapon_case: "武器箱",
+    key: "钥匙",
+    trading_card: "集换式卡牌",
+    specific: "特定商品"
+  };
+  const query = category === "all" ? "" : String(body.name || "").trim();
+  if (query.length > 160 || (category === "specific" && !query)) {
     throw new Error("请输入有效的物品名称");
   }
+  const legacyPriceMode = legacyTradingCardsOnly
+    ? body.cardPriceMode || "lowest"
+    : legacyWeaponCasesOnly
+      ? body.casePriceMode || "lowest"
+      : body.itemPriceMode;
+  const marketPriceMode = normalizeMarketPriceMode(
+    body.marketPriceMode || legacyPriceMode
+  );
   const mode = body.mode === "contains" ? "contains" : "exact";
   const scan = await scanMatches(
     session.steamId,
     query,
     mode,
-    { tradingCardsOnly, weaponCasesOnly }
+    { category }
   );
+  const totalFound = scan.matches.reduce((sum, item) => sum + item.amount, 0);
+  const candidates = [];
+  let candidateUnits = 0;
+  for (const item of scan.matches) {
+    if (candidateUnits >= MAX_MATCHED_UNITS) break;
+    const amount = Math.min(item.amount, MAX_MATCHED_UNITS - candidateUnits);
+    candidates.push({ ...item, amount });
+    candidateUnits += amount;
+  }
   let priceErrors = [];
   let wallet = walletCache?.value || null;
-  if (marketPriceMode && scan.matches.length) {
+  if (marketPriceMode && candidates.length) {
     wallet = wallet || await getWalletInfo();
     priceErrors = marketPriceMode === "highest_buy"
-      ? await populateHighestMarketBuyOrders(scan.matches, wallet)
-      : await populateLowestMarketPrices(scan.matches, wallet);
+      ? await populateHighestMarketBuyOrders(candidates, wallet)
+      : await populateLowestMarketPrices(candidates, wallet);
   }
-  const totalFound = scan.matches.reduce((sum, item) => sum + item.amount, 0);
   const usableMatches = marketPriceMode === "highest_buy"
-    ? capMatchesToHighestBuyDemand(scan.matches)
+    ? capMatchesToHighestBuyDemand(candidates)
     : marketPriceMode === "lowest"
-      ? scan.matches.filter((item) => item.lowestSellerPrice > 0)
-      : scan.matches;
+      ? candidates.filter((item) => item.lowestSellerPrice > 0)
+      : candidates;
   const usableBeforeLimit = usableMatches.reduce(
     (sum, item) => sum + item.amount,
     0
@@ -791,11 +818,8 @@ async function createPreview(body) {
     steamId: session.steamId,
     query,
     mode,
-    tradingCardsOnly,
-    weaponCasesOnly,
-    cardPriceMode,
-    casePriceMode,
-    itemPriceMode,
+    category,
+    categoryName: categoryNames[category],
     marketPriceMode,
     marketPriceTime: marketPriceMode ? Date.now() : null,
     wallet: wallet || walletCache?.value || null,
@@ -827,16 +851,16 @@ async function createPreview(body) {
     confirmToken,
     query,
     mode,
-    tradingCardsOnly,
-    weaponCasesOnly,
-    cardPriceMode,
-    casePriceMode,
-    itemPriceMode,
+    category,
+    categoryName: categoryNames[category],
+    tradingCardsOnly: category === "trading_card",
+    weaponCasesOnly: category === "weapon_case",
+    keysOnly: category === "key",
     marketPriceMode,
     totalFound,
     usableCount: unitsKept,
-    truncated: usableBeforeLimit > unitsKept,
-    demandLimited: marketPriceMode === "highest_buy" && totalFound > usableBeforeLimit,
+    truncated: totalFound > candidateUnits || usableBeforeLimit > unitsKept,
+    demandLimited: marketPriceMode === "highest_buy" && candidateUnits > usableBeforeLimit,
     groups: groupMatches(kept),
     marketBuyerPriceFormatted,
     marketSellerPriceFormatted,

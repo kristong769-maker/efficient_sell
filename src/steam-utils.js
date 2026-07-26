@@ -40,6 +40,35 @@ function isWeaponCase(description, appId, contextId) {
   return /\bCase(?:\s+\d+)?$/i.test(marketHashName);
 }
 
+function isMarketKey(description) {
+  const tags = description?.tags || [];
+  const hasKeyTag = tags.some((tag) => {
+    const internalName = String(tag?.internal_name || "");
+    const localizedName = String(tag?.localized_tag_name || "");
+    return /(?:^|_)key(?:tag)?(?:_|$)/i.test(internalName)
+      || /^(?:key|钥匙)$/i.test(localizedName.trim());
+  });
+  if (hasKeyTag) return true;
+
+  const names = [
+    description?.name,
+    description?.market_name,
+    description?.market_hash_name
+  ].filter(Boolean);
+  return names.some((name) => (
+    /\bkey(?:\s*#?\d+)?$/i.test(String(name).trim())
+    || /钥匙(?:（[^）]*）|\([^)]*\))?$/.test(String(name).trim())
+  ));
+}
+
+function normalizeInventoryCategory(value) {
+  const category = String(value || "");
+  return new Set(["all", "weapon_case", "key", "trading_card", "specific"])
+    .has(category)
+    ? category
+    : null;
+}
+
 function normalizeMarketPriceMode(value) {
   if (value === "lowest" || value === "highest_buy") return value;
   return null;
@@ -294,10 +323,12 @@ module.exports = {
   highestBuyOrderFromListingHtml,
   highestBuyOrderFromHistogram,
   itemMatches,
+  isMarketKey,
   isWeaponCase,
   marketListingKey,
   marketListingUrl,
   normalizeName,
+  normalizeInventoryCategory,
   normalizeMarketPriceMode,
   parseDisplayPrice,
   parseEmbeddedJson,
